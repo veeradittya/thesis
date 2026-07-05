@@ -23,14 +23,21 @@ export function useMovableCard(id: string, def: Box, opts?: { minW?: number; min
   const rez = useRef<{ px: number; py: number; w: number; h: number } | null>(null);
 
   useEffect(() => {
+    if (drag.current || rez.current) return; // never re-place a card mid-interaction
     try {
       const s = localStorage.getItem("thesis.layout." + id);
       if (s) {
         const b = JSON.parse(s);
-        if (b && [b.x, b.y, b.w, b.h].every((n) => Number.isFinite(n))) setBox({ x: b.x, y: b.y, w: b.w, h: b.h });
+        if (b && [b.x, b.y, b.w, b.h].every((n) => Number.isFinite(n))) {
+          setBox({ x: b.x, y: b.y, w: b.w, h: b.h });
+          return;
+        }
       }
     } catch {}
-  }, [id]);
+    // No saved layout → keep following the (responsive) default, so untouched cards
+    // re-pack live when the computed home layout changes with the viewport.
+    setBox({ x: def.x, y: def.y, w: def.w, h: def.h });
+  }, [id, def.x, def.y, def.w, def.h]);
 
   const save = (b: Box) => {
     try {

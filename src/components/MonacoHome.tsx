@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { cn } from "@/lib/utils";
+import { computeHomeLayout } from "@/lib/cardLayout";
 import { LedgerCard } from "@/components/LedgerCard";
 import { PortfolioMarketsCard } from "@/components/PortfolioMarketsCard";
 import { MarketDetailCard, type OpenMarket } from "@/components/MarketDetailCard";
@@ -27,12 +27,13 @@ import type { MarketLite } from "@/lib/oddpool";
 // tracking, near-white text, hairline borders, a white pill CTA. Nav items are ours.
 
 // Scrollable card canvas (cards persist their own position/size to localStorage).
-// CANVAS_W/H are the placement grid for findEmptySpot; the *displayed* canvas grows
-// dynamically to keep CANVAS_MARGIN of free space beyond the right/bottom-most card.
-const CANVAS_W = 2000;
-const CANVAS_H = 1500;
+// Default card positions come from computeHomeLayout (responsive masonry); the
+// *displayed* canvas grows dynamically to keep CANVAS_MARGIN of free space beyond the
+// right/bottom-most card (small screens use a slim margin so phones don't side-scroll).
+const CANVAS_H = 1500; // findEmptySpot vertical scan depth (×2)
+const CANVAS_W_SCAN = 2000; // findEmptySpot horizontal scan cap
 const CANVAS_MARGIN = 400;
-const CANVAS_MIN_W = 1600;
+const CANVAS_MIN_W = 1600; // SSR-safe fallbacks; real mins come from the viewport
 const CANVAS_MIN_H = 1000;
 
 // Map a holding's company name to a clean Guardian search term ("Amazon.com, Inc." → "Amazon").
@@ -45,14 +46,20 @@ function cleanCompany(name: string): string {
 }
 
 export function MonacoHome() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [drag, setDrag] = useState(false);
   const [ledger, setLedger] = useState<ParsedPortfolio | null>(null);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [parsing, setParsing] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
+
+  // Viewport-driven default card layout (masonry) — untouched cards follow it live;
+  // dragged/resized cards keep their persisted box (see useMovableCard).
+  const [vpW, setVpW] = useState(0);
+  useEffect(() => {
+    const measure = () => setVpW(window.innerWidth);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  const homeL = useMemo(() => computeHomeLayout(vpW || 1440), [vpW]);
 
   // Auth (Google sign-in) + the account dropdown.
   const { data: session, status } = useSession();
@@ -84,8 +91,12 @@ export function MonacoHome() {
     const pad = 16;
     const hit = (x: number, y: number) =>
       rects.some((r) => x < r.x + r.w + pad && x + w + pad > r.x && y < r.y + r.h + pad && y + h + pad > r.y);
-    for (let y = 20; y + h <= CANVAS_H; y += 40) for (let x = 20; x + w <= CANVAS_W; x += 40) if (!hit(x, y)) return { x, y };
-    return { x: 80, y: 140 };
+    // Scan only within the visible canvas width so spawned cards never land off-screen
+    // on narrow viewports; if nothing fits, drop the card below the stacked region.
+    const maxX = Math.max(20, Math.min(canvas.clientWidth, CANVAS_W_SCAN) - w - 20);
+    for (let y = 20; y + h <= CANVAS_H * 2; y += 40) for (let x = 20; x <= maxX; x += 40) if (!hit(x, y)) return { x, y };
+    const maxB = rects.reduce((m, r) => Math.max(m, r.y + r.h), 20);
+    return { x: 20, y: maxB + 20 };
   }
 
   // Keep CANVAS_MARGIN of free canvas beyond the right/bottom-most card at all times.
@@ -106,15 +117,21 @@ export function MonacoHome() {
         maxR = Math.max(maxR, r.right - cr.left);
         maxB = Math.max(maxB, r.bottom - cr.top);
       }
-      const w = Math.max(CANVAS_MIN_W, Math.round(maxR) + CANVAS_MARGIN);
-      const h = Math.max(CANVAS_MIN_H, Math.round(maxB) + CANVAS_MARGIN);
+      // Canvas is at least the viewport; beyond the stacked region keep a roomy margin on
+      // desktop but a slim one on phones (no pointless sideways scroll on touch).
+      const vw = mainRef.current?.clientWidth ?? CANVAS_MIN_W;
+      const vh = mainRef.current?.clientHeight ?? CANVAS_MIN_H;
+      const m = vw < 640 ? 16 : CANVAS_MARGIN;
+      const w = Math.max(vw, Math.round(maxR) + m);
+      const h = Math.max(vh, Math.round(maxB) + m);
       setCanvasSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h })); // bail if unchanged (no observer loop)
     };
     const schedule = () => { if (!raf) raf = window.setTimeout(recompute, 32); }; // coalesce bursts; setTimeout fires even when rAF is throttled
     const mo = new MutationObserver(schedule);
     mo.observe(canvas, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", schedule); // viewport changes move the min bounds too
     schedule();
-    return () => { mo.disconnect(); if (raf) clearTimeout(raf); };
+    return () => { mo.disconnect(); window.removeEventListener("resize", schedule); if (raf) clearTimeout(raf); };
   }, [ledger]); // (re)attach once the canvas actually mounts (it renders only when `ledger` is set)
 
   function openMarket(m: MarketLite, ticker: string) {
@@ -257,24 +274,6 @@ export function MonacoHome() {
     },
   ];
 
-  async function take(files: FileList | null) {
-    const f = files?.[0];
-    if (!f) return;
-    setFile(f);
-    setParseError(null);
-    setParsing(true);
-    try {
-      // Dynamic import keeps the ~1MB xlsx parser out of the initial bundle.
-      const { parsePortfolioFile } = await import("@/lib/parsePortfolio");
-      setLedger(await parsePortfolioFile(f));
-    } catch (e) {
-      setLedger(null);
-      setParseError(e instanceof Error ? e.message : "Couldn't read that spreadsheet.");
-    } finally {
-      setParsing(false);
-    }
-  }
-
   // Ledger source, auth-gated:
   //  • guest → seed the read-only PanAgora demo (ephemeral, never persisted to an account)
   //  • authenticated → restore this account's cached ledger, else start empty (they add holdings)
@@ -368,8 +367,8 @@ export function MonacoHome() {
               WebkitBackdropFilter: "blur(24px)",
             }}
           >
-            {/* left links */}
-            <nav className="flex flex-1 shrink-0 items-center justify-start gap-8 pl-[25px]">
+            {/* left links — tighter gaps/padding on phones so the pill scales proportionally */}
+            <nav className="flex flex-1 shrink-0 items-center justify-start gap-4 pl-4 sm:gap-8 sm:pl-[25px]">
               <button
                 onClick={() => mainRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" })}
                 style={navText}
@@ -382,17 +381,17 @@ export function MonacoHome() {
               </button>
             </nav>
 
-            {/* center logo — serif all-caps wordmark (Monaco style) */}
+            {/* center logo — serif all-caps wordmark (Monaco style); scales down on phones */}
             <button
               className="absolute left-1/2 z-10 -translate-x-1/2 text-white"
-              style={{ fontFamily: "var(--font-serif), Georgia, serif", fontSize: 26, fontWeight: 500, letterSpacing: "0.05em", lineHeight: 1 }}
+              style={{ fontFamily: "var(--font-serif), Georgia, serif", fontSize: "clamp(17px, 1.8vw + 10px, 26px)", fontWeight: 500, letterSpacing: "0.05em", lineHeight: 1 }}
             >
               THESIS
             </button>
 
-            {/* right actions — Dispatch (text), then Log in / account (oval pill, extreme right) */}
-            <div className="flex flex-1 shrink-0 items-center justify-end gap-8 pr-[25px]">
-              <button onClick={() => showToast("Dispatch — coming soon")} style={navText} className="opacity-80 transition-opacity hover:opacity-100">
+            {/* right actions — Dispatch (text; hidden on phones), then Log in / account (oval pill, extreme right) */}
+            <div className="flex flex-1 shrink-0 items-center justify-end gap-4 pr-4 sm:gap-8 sm:pr-[25px]">
+              <button onClick={() => showToast("Dispatch — coming soon")} style={navText} className="hidden opacity-80 transition-opacity hover:opacity-100 sm:block">
                 Dispatch
               </button>
               {session?.user ? (
@@ -461,13 +460,14 @@ export function MonacoHome() {
       <main ref={mainRef} className="no-scrollbar relative flex-1 overflow-auto">
         {ledger ? (
           <div ref={canvasRef} onContextMenu={onCanvasContextMenu} className="relative" style={{ width: canvasSize.w, height: canvasSize.h }}>
-            <LedgerCard data={ledger} editable={authed} onChange={setLedger} x={40} y={110} width={460} height={470} />
-            <PortfolioMarketsCard holdings={ledger.holdings} x={530} y={110} width={520} height={560} onOpenMarket={openMarket} />
-            <WhaleCard x={40} y={680} width={1010} height={300} />
-            <OddpoolChatCard portfolio={portfolioCtx} x={1080} y={110} width={460} height={560} />
-            <MarketHoursCard x={1080} y={690} width={300} height={116} />
-            <NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} x={1080} y={826} width={430} height={560} />
-            <LivePricesCard assets={priceAssets} onOpenChart={openChart} x={1560} y={110} width={360} height={500} />
+            {/* default positions/sizes come from the responsive masonry (computeHomeLayout) */}
+            <LedgerCard data={ledger} editable={authed} onChange={setLedger} x={homeL.ledger.x} y={homeL.ledger.y} width={homeL.ledger.w} height={homeL.ledger.h} />
+            <PortfolioMarketsCard holdings={ledger.holdings} x={homeL.markets.x} y={homeL.markets.y} width={homeL.markets.w} height={homeL.markets.h} onOpenMarket={openMarket} />
+            <WhaleCard x={homeL.whale.x} y={homeL.whale.y} width={homeL.whale.w} height={homeL.whale.h} />
+            <OddpoolChatCard portfolio={portfolioCtx} x={homeL.chat.x} y={homeL.chat.y} width={homeL.chat.w} height={homeL.chat.h} />
+            <MarketHoursCard x={homeL.hours.x} y={homeL.hours.y} width={homeL.hours.w} height={homeL.hours.h} />
+            <NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} x={homeL.news.x} y={homeL.news.y} width={homeL.news.w} height={homeL.news.h} />
+            <LivePricesCard assets={priceAssets} onOpenChart={openChart} x={homeL.prices.x} y={homeL.prices.y} width={homeL.prices.w} height={homeL.prices.h} />
             {openMarkets.map((m) => (
               <MarketDetailCard key={m.market_id} market={m} x={m._x} y={m._y} onClose={() => closeMarket(m.market_id)} />
             ))}
@@ -500,53 +500,10 @@ export function MonacoHome() {
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 pt-24">
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDrag(true);
-              }}
-              onDragLeave={() => setDrag(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDrag(false);
-                take(e.dataTransfer.files);
-              }}
-              className={cn(
-                "flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-dashed px-10 py-14 text-center transition-colors",
-                drag ? "border-white/40 bg-[#181818]" : "border-white/15 bg-[#0a0a0a]",
-              )}
-            >
-              <span className="flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-[#181818]">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b0b0b0" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 16V4M12 4l-4 4M12 4l4 4" />
-                  <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-                </svg>
-              </span>
-
-              <div>
-                <p className="text-[15px] text-white">Upload your portfolio</p>
-                <p className="mt-1 text-[13px] text-[#8a8a8a]">Drop an .xlsx file here, or browse to begin</p>
-              </div>
-
-              <button
-                onClick={() => inputRef.current?.click()}
-                className="rounded-full bg-white px-5 py-2 text-[13px] font-medium text-black transition-colors hover:bg-[#e6e6e6]"
-              >
-                Upload .xlsx
-              </button>
-
-              {parsing && <p className="text-[12px] text-[#b0b0b0]">Parsing {file?.name}…</p>}
-              {parseError && <p className="text-[12px] text-[#ff6b6b]">{parseError}</p>}
-
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                hidden
-                onChange={(e) => take(e.target.files)}
-              />
-            </div>
+          // Brief seed-load moment — land straight on the pre-seeded dashboard (the old
+          // upload-a-portfolio dropzone is gone; xlsx upload lives on in parsePortfolio).
+          <div className="flex h-full items-center justify-center">
+            <div className="dot-loader" role="status" aria-label="Loading portfolio" />
           </div>
         )}
       </main>

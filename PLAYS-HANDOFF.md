@@ -125,7 +125,8 @@ The canvas renders only when `ledger` is set. Adding a Plays card type means add
 - **Close fn:** filter it out.
 - **Render:** `{openX.map(o => <XCard key={o.id} … x={o._x} y={o._y} onClose={()=>closeX(o.id)} />)}` inside the `<div ref={canvasRef}>`.
 - **Spawn trigger:** either a right-click menu item (see `menuItems` + `onCanvasContextMenu`, uses `ContextMenu` from `src/components/ContextMenu.tsx`, `MenuItem = {label, onClick?, children?, disabled?, hint?}`) or a button/nav click.
-- **findEmptySpot(w,h):** scans a `CANVAS_W×CANVAS_H` (2000×1500) grid for a gap among existing `.fade-in.absolute` cards; falls back to `{80,140}`.
+- **findEmptySpot(w,h):** scans within the visible canvas width (capped 2000, depth 3000) for a gap among existing `.fade-in.absolute` cards; falls back to just below the stacked region.
+- **Default home layout is responsive** (`src/lib/cardLayout.ts` → `computeHomeLayout(viewportW)`): a masonry packer (uniform gap, span support, skyline + least-waste tie-break) computes the 7 home cards' default boxes per viewport — 1 column on phones, up to 6 columns capped at 340–520px each. `useMovableCard` follows these defaults live until a card is dragged/resized (then its saved box wins). Reuse this for any Plays canvas.
 
 ### Dynamic canvas sizing (already handled — don't re-solve)
 A `MutationObserver` on `canvasRef` (deps `[ledger]`) keeps **+400px (`CANVAS_MARGIN`) of free space** beyond the right-most and bottom-most card, growing/shrinking `canvasSize`. **Gotcha that already bit us:** it uses `setTimeout(recompute,32)` **not `requestAnimationFrame`** — rAF does not fire in the headless preview, so the canvas would get stuck at the floor. Keep setTimeout.
