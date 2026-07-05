@@ -293,10 +293,14 @@ export function MonacoHome() {
     } catch {}
     setHydrated(true);
   }, []);
-  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.markets.open", JSON.stringify(openMarkets)); } catch {} }, [openMarkets, hydrated]);
-  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.events.open", JSON.stringify(openEvents)); } catch {} }, [openEvents, hydrated]);
-  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.signals.open", JSON.stringify(openSignals)); } catch {} }, [openSignals, hydrated]);
-  useEffect(() => { if (hydrated) try { if (search) localStorage.setItem("thesis.search.open", search.mode); else localStorage.removeItem("thesis.search.open"); } catch {} }, [search, hydrated]);
+  // Phones don't persist anything (per user): the stack is a fixed, read-through view —
+  // it still RESTORES desktop-opened cards, but never writes back.
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.markets.open", JSON.stringify(openMarkets)); } catch {} }, [openMarkets, hydrated]);
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.events.open", JSON.stringify(openEvents)); } catch {} }, [openEvents, hydrated]);
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.signals.open", JSON.stringify(openSignals)); } catch {} }, [openSignals, hydrated]);
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { if (search) localStorage.setItem("thesis.search.open", search.mode); else localStorage.removeItem("thesis.search.open"); } catch {} }, [search, hydrated]);
 
   const menuItems: MenuItem[] = [
     {
@@ -393,7 +397,7 @@ export function MonacoHome() {
     : [];
 
   return (
-    <div className="flex h-screen flex-col bg-black font-sans tracking-[-0.02em] text-[#fafafa] antialiased">
+    <div className={`bg-black font-sans tracking-[-0.02em] text-[#fafafa] antialiased ${isMobile ? "min-h-dvh overflow-x-clip" : "flex h-screen flex-col"}`}>
       {/* ── Nav: exact Monaco floating liquid-glass pill ───── */}
       <header className="pointer-events-none fixed inset-x-0 top-6 z-50 w-full px-4">
         <div className="mx-auto flex w-full max-w-[1920px] flex-col items-center">
@@ -410,7 +414,7 @@ export function MonacoHome() {
             {/* left links — tighter gaps/padding on phones so the pill scales proportionally */}
             <nav className="flex flex-1 shrink-0 items-center justify-start gap-4 pl-4 sm:gap-8 sm:pl-[25px]">
               <button
-                onClick={() => mainRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" })}
+                onClick={() => (isMobile ? window.scrollTo({ top: 0, behavior: "smooth" }) : mainRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" }))}
                 style={navText}
                 className="capitalize opacity-80 transition-opacity hover:opacity-100"
               >
@@ -497,11 +501,13 @@ export function MonacoHome() {
       )}
 
       {/* ── Body: desktop = pannable card canvas · mobile = native vertical stack ── */}
-      <main ref={mainRef} className={`no-scrollbar relative flex-1 ${isMobile ? "overflow-y-auto overflow-x-hidden" : "overflow-auto"}`}>
+      {/* Mobile: no nested scroll container — the DOCUMENT scrolls (smoothest native path:
+          momentum, rubber-band, URL-bar collapse). Desktop keeps the pannable scroller. */}
+      <main ref={mainRef} className={isMobile ? "relative" : "no-scrollbar relative flex-1 overflow-auto"}>
         {!ledger ? (
           // Brief seed-load moment — land straight on the pre-seeded dashboard (the old
           // upload-a-portfolio dropzone is gone; xlsx upload lives on in parsePortfolio).
-          <div className="flex h-full items-center justify-center">
+          <div className="flex h-full min-h-[70dvh] items-center justify-center">
             <div className="dot-loader" role="status" aria-label="Loading portfolio" />
           </div>
         ) : isMobile ? (
