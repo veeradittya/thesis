@@ -134,6 +134,19 @@ body {
   animation: fade-in 0.3s ease-out;
 }
 
+/* Mobile static stack: movable cards render in-flow inside these wrappers.
+   Re-enable native touch scrolling from card headers (they carry touch-none for
+   desktop dragging), neutralize the move cursor, and hide resize corners. */
+.static-card .touch-none {
+  touch-action: auto !important;
+}
+.static-card .cursor-move {
+  cursor: default !important;
+}
+.static-card .cursor-nwse-resize {
+  display: none !important;
+}
+
 /* Four-dot bounce loader (Signal Search) — dots muted to the card's text tone. */
 .dot-loader {
   height: 18px;

@@ -1,12 +1,18 @@
-// Responsive default layout for the home-canvas cards (monaco.com-style masonry).
-// Given the viewport width it packs the card set into N equal-width columns with a
-// UNIFORM gap everywhere (between columns and between stacked cards) and no holes:
-// each card lands in the column (or column-span window) with the lowest skyline.
-// Phones resolve to a single column → cards stack sequentially under the nav.
+// Layout for the home cards.
 //
-// These are only the DEFAULTS: useMovableCard persists any card the user drags or
-// resizes and that saved box always wins; untouched cards keep following this layout
-// (including live window resizes).
+// DESKTOP (≥768px): a fill-height packer. Cards are distributed into equal-width
+// columns (balanced by their preferred heights), then each column's cards are scaled
+// so the column ends EXACTLY at the viewport bottom — the first screen is fully used
+// with no dead space below. If the viewport is too short for the width-derived column
+// count (cards would squash below MIN_SCALE), extra columns are added to the right for
+// density; the region can extend past the viewport and is reached by panning (the main
+// scroller hides its scrollbars). One uniform gap everywhere. Reflows on every resize.
+//
+// MOBILE (<768px): the canvas is replaced by a native vertical stack (see MonacoHome);
+// this module just supplies the per-card readable heights for that stack.
+//
+// These are DEFAULTS: useMovableCard persists any card the user drags/resizes and that
+// saved box wins; untouched cards keep following this layout live.
 
 export interface LayoutBox {
   x: number;
@@ -15,58 +21,93 @@ export interface LayoutBox {
   h: number;
 }
 
-// Placement priority (also the top-to-bottom order on phones). Heights are each
-// card's designed height; `span` lets the wide whale table cover two columns.
-const HOME_CARDS: Array<{ key: string; h: number; span?: number }> = [
-  { key: "ledger", h: 470 },
-  { key: "markets", h: 560 },
-  { key: "chat", h: 560 },
-  { key: "whale", h: 300, span: 2 },
-  { key: "prices", h: 500 },
-  { key: "news", h: 560 },
-  { key: "hours", h: 116 },
+export const MOBILE_BREAKPOINT = 768;
+
+// Placement priority (leftmost column first). `h` = preferred/basis height used for
+// balancing + scaling; `min` = never scale below this (content becomes unreadable).
+const HOME_CARDS: Array<{ key: string; h: number; min: number }> = [
+  { key: "ledger", h: 470, min: 260 },
+  { key: "markets", h: 560, min: 300 },
+  { key: "chat", h: 560, min: 300 },
+  { key: "whale", h: 420, min: 260 },
+  { key: "prices", h: 500, min: 260 },
+  { key: "news", h: 560, min: 300 },
+  { key: "hours", h: 116, min: 104 },
 ];
 
-const MIN_COL_W = 340; // below this a card's content cramps
-const MAX_COL_W = 520; // beyond this cards look bloated — extra width becomes side margin
+// Readable full-width heights for the mobile stack (charts/lists uncramped at ~350px wide).
+export const MOBILE_CARD_HEIGHTS: Record<string, number> = {
+  ledger: 470,
+  markets: 540,
+  chat: 500,
+  whale: 430,
+  prices: 480,
+  news: 540,
+  hours: 116,
+};
 
-export function computeHomeLayout(viewportW: number): Record<string, LayoutBox> {
-  const mobile = viewportW < 640;
-  const margin = mobile ? 14 : 40; // canvas edge inset
-  const gap = mobile ? 14 : 20; // THE uniform gap (columns + stacked cards)
-  const top = mobile ? 96 : 110; // clears the floating nav pill (top 24 + 55 high)
+const MIN_COL_W = 340;
+const MAX_COL_W = 520;
+const MIN_SCALE = 0.6; // below this cards squash → add a column instead
 
-  const usable = Math.max(280, viewportW - margin * 2);
-  const cols = Math.min(6, Math.max(1, Math.floor((usable + gap) / (MIN_COL_W + gap))));
-  const colW = Math.min(MAX_COL_W, Math.floor((usable - (cols - 1) * gap) / cols));
-  // Center the packed region when the column cap leaves spare width (large screens).
-  const regionW = cols * colW + (cols - 1) * gap;
-  const left = margin + Math.max(0, Math.floor((usable - regionW) / 2));
+export function computeHomeLayout(viewportW: number, viewportH: number): Record<string, LayoutBox> {
+  const margin = 40;
+  const gap = 20;
+  const top = 110; // clears the floating nav pill
+  const bottom = 20;
 
-  // Skyline per column; seeded at top-gap so `y = skyline + gap` is uniform for row 1 too.
-  const colH: number[] = Array(cols).fill(top - gap);
-  const out: Record<string, LayoutBox> = {};
+  const usable = Math.max(320, viewportW - margin * 2);
+  const widthCols = Math.min(6, Math.max(1, Math.floor((usable + gap) / (MIN_COL_W + gap))));
+  const colW = Math.min(MAX_COL_W, Math.floor((usable - (widthCols - 1) * gap) / widthCols));
+  const availH = Math.max(380, viewportH - top - bottom);
 
-  for (const card of HOME_CARDS) {
-    const span = Math.min(card.span ?? 1, cols);
-    // Pick the span-window with the lowest skyline; tie-break on least "waste"
-    // (skyline raised under the card), so a spanning card never buries an empty column.
-    let best = 0;
-    let bestY = Infinity;
-    let bestWaste = Infinity;
-    for (let i = 0; i + span <= cols; i++) {
-      const win = colH.slice(i, i + span);
-      const y = Math.max(...win);
-      const waste = win.reduce((s, h) => s + (y - h), 0);
-      if (y < bestY || (y === bestY && waste < bestWaste)) {
-        best = i;
-        bestY = y;
-        bestWaste = waste;
-      }
+  // Balanced assignment: next card → column with the smallest summed basis height.
+  const assign = (n: number) => {
+    const cols: Array<Array<(typeof HOME_CARDS)[number]>> = Array.from({ length: n }, () => []);
+    const sums = Array(n).fill(0);
+    for (const card of HOME_CARDS) {
+      let best = 0;
+      for (let i = 1; i < n; i++) if (sums[i] < sums[best]) best = i;
+      cols[best].push(card);
+      sums[best] += card.h;
     }
-    const y = bestY + gap;
-    out[card.key] = { x: left + best * (colW + gap), y, w: colW * span + gap * (span - 1), h: card.h };
-    for (let i = best; i < best + span; i++) colH[i] = y + card.h;
+    return { cols, sums };
+  };
+
+  // Grow the column count past the width-derived one until nothing squashes below
+  // MIN_SCALE (extra columns extend right → panned to, not squeezed in).
+  let n = widthCols;
+  let picked = assign(n);
+  while (n < HOME_CARDS.length) {
+    const worst = Math.min(
+      ...picked.cols.map((col, i) => (col.length ? (availH - (col.length - 1) * gap) / picked.sums[i] : Infinity)),
+    );
+    if (worst >= MIN_SCALE) break;
+    n += 1;
+    picked = assign(n);
   }
+
+  const out: Record<string, LayoutBox> = {};
+  picked.cols.forEach((col, ci) => {
+    if (!col.length) return;
+    const inner = availH - (col.length - 1) * gap;
+    const scale = inner / picked.sums[ci];
+    // Scale to fill the column exactly; enforce per-card minimums by taking the excess
+    // out of the tallest card, and pin the last card to the exact bottom edge.
+    let heights = col.map((c) => Math.max(c.min, Math.round(c.h * scale)));
+    let excess = heights.reduce((s, h) => s + h, 0) - inner;
+    if (excess !== 0) {
+      const iTall = heights.indexOf(Math.max(...heights));
+      heights[iTall] = Math.max(col[iTall].min, heights[iTall] - excess);
+    }
+    excess = heights.reduce((s, h) => s + h, 0) - inner;
+    if (excess < 0) heights[heights.length - 1] -= excess; // stretch last card to the edge
+
+    let y = top;
+    col.forEach((c, ri) => {
+      out[c.key] = { x: margin + ci * (colW + gap), y, w: colW, h: heights[ri] };
+      y += heights[ri] + gap;
+    });
+  });
   return out;
 }

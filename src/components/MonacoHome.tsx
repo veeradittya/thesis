@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { computeHomeLayout } from "@/lib/cardLayout";
+import { computeHomeLayout, MOBILE_BREAKPOINT, MOBILE_CARD_HEIGHTS } from "@/lib/cardLayout";
+import { StaticLayoutContext } from "@/components/ui/useMovableCard";
 import { LedgerCard } from "@/components/LedgerCard";
 import { PortfolioMarketsCard } from "@/components/PortfolioMarketsCard";
 import { MarketDetailCard, type OpenMarket } from "@/components/MarketDetailCard";
@@ -45,21 +46,61 @@ function cleanCompany(name: string): string {
     .trim();
 }
 
+// In-flow wrapper for a card in the mobile stack: reserves the card's readable height
+// while the card itself (absolute + 100%×100% under StaticLayoutContext) fills it.
+function MobileSlot({ h, children }: { h: number; children: React.ReactNode }) {
+  return (
+    <div className="static-card relative w-full shrink-0" style={{ height: h }}>
+      {children}
+    </div>
+  );
+}
+
 export function MonacoHome() {
   const [ledger, setLedger] = useState<ParsedPortfolio | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
-  // Viewport-driven default card layout (masonry) — untouched cards follow it live;
-  // dragged/resized cards keep their persisted box (see useMovableCard).
-  const [vpW, setVpW] = useState(0);
+  // Viewport-driven layout — desktop packs cards to fill the viewport height exactly
+  // and reflows on every resize (untouched cards follow; dragged/resized ones keep
+  // their persisted box). Under MOBILE_BREAKPOINT the canvas is swapped for a native
+  // vertical stack (no absolute positioning, no drag).
+  const [vp, setVp] = useState({ w: 0, h: 0 });
   useEffect(() => {
-    const measure = () => setVpW(window.innerWidth);
+    const measure = () => setVp({ w: window.innerWidth, h: window.innerHeight });
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
-  const homeL = useMemo(() => computeHomeLayout(vpW || 1440), [vpW]);
+  const homeL = useMemo(() => computeHomeLayout(vp.w || 1440, vp.h || 900), [vp.w, vp.h]);
+  const isMobile = (vp.w || 1440) < MOBILE_BREAKPOINT;
+
+  // Desktop canvas panning: click-drag on empty background scrolls the view (grab
+  // cursor). Card interactions are untouched — pan only starts when the pointer goes
+  // down on the canvas itself, and every card fully covers its own area.
+  const panRef = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+  const startPan = (e: React.PointerEvent) => {
+    if (e.button !== 0 || e.target !== canvasRef.current) return;
+    const main = mainRef.current;
+    if (!main) return;
+    panRef.current = { x: e.clientX, y: e.clientY, sl: main.scrollLeft, st: main.scrollTop };
+    setPanning(true);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+  };
+  const movePan = (e: React.PointerEvent) => {
+    const p = panRef.current;
+    const main = mainRef.current;
+    if (!p || !main) return;
+    main.scrollLeft = p.sl - (e.clientX - p.x);
+    main.scrollTop = p.st - (e.clientY - p.y);
+  };
+  const endPan = (e: React.PointerEvent) => {
+    if (!panRef.current) return;
+    panRef.current = null;
+    setPanning(false);
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+  };
 
   // Auth (Google sign-in) + the account dropdown.
   const { data: session, status } = useSession();
@@ -117,13 +158,12 @@ export function MonacoHome() {
         maxR = Math.max(maxR, r.right - cr.left);
         maxB = Math.max(maxB, r.bottom - cr.top);
       }
-      // Canvas is at least the viewport; beyond the stacked region keep a roomy margin on
-      // desktop but a slim one on phones (no pointless sideways scroll on touch).
+      // Canvas is at least the viewport; beyond the stacked region keep a pannable
+      // margin (the canvas only exists on desktop — phones render a native stack).
       const vw = mainRef.current?.clientWidth ?? CANVAS_MIN_W;
       const vh = mainRef.current?.clientHeight ?? CANVAS_MIN_H;
-      const m = vw < 640 ? 16 : CANVAS_MARGIN;
-      const w = Math.max(vw, Math.round(maxR) + m);
-      const h = Math.max(vh, Math.round(maxB) + m);
+      const w = Math.max(vw, Math.round(maxR) + CANVAS_MARGIN);
+      const h = Math.max(vh, Math.round(maxB) + CANVAS_MARGIN);
       setCanvasSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h })); // bail if unchanged (no observer loop)
     };
     const schedule = () => { if (!raf) raf = window.setTimeout(recompute, 32); }; // coalesce bursts; setTimeout fires even when rAF is throttled
@@ -132,7 +172,7 @@ export function MonacoHome() {
     window.addEventListener("resize", schedule); // viewport changes move the min bounds too
     schedule();
     return () => { mo.disconnect(); window.removeEventListener("resize", schedule); if (raf) clearTimeout(raf); };
-  }, [ledger]); // (re)attach once the canvas actually mounts (it renders only when `ledger` is set)
+  }, [ledger, isMobile]); // (re)attach when the canvas mounts (needs `ledger`, desktop only)
 
   function openMarket(m: MarketLite, ticker: string) {
     setOpenMarkets((prev) => {
@@ -456,11 +496,66 @@ export function MonacoHome() {
         </div>
       )}
 
-      {/* ── Body: PanAgora ledger (seeded) as a movable/resizable card ── */}
-      <main ref={mainRef} className="no-scrollbar relative flex-1 overflow-auto">
-        {ledger ? (
-          <div ref={canvasRef} onContextMenu={onCanvasContextMenu} className="relative" style={{ width: canvasSize.w, height: canvasSize.h }}>
-            {/* default positions/sizes come from the responsive masonry (computeHomeLayout) */}
+      {/* ── Body: desktop = pannable card canvas · mobile = native vertical stack ── */}
+      <main ref={mainRef} className={`no-scrollbar relative flex-1 ${isMobile ? "overflow-y-auto overflow-x-hidden" : "overflow-auto"}`}>
+        {!ledger ? (
+          // Brief seed-load moment — land straight on the pre-seeded dashboard (the old
+          // upload-a-portfolio dropzone is gone; xlsx upload lives on in parsePortfolio).
+          <div className="flex h-full items-center justify-center">
+            <div className="dot-loader" role="status" aria-label="Loading portfolio" />
+          </div>
+        ) : isMobile ? (
+          // Mobile (<768px): full-width cards in normal flow, natively scrollable; drag,
+          // resize and canvas interactions are disabled (StaticLayoutContext).
+          <StaticLayoutContext.Provider value={true}>
+            <div className="flex flex-col gap-3.5 px-3.5 pb-8 pt-24">
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.ledger}><LedgerCard data={ledger} editable={authed} onChange={setLedger} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.markets}><PortfolioMarketsCard holdings={ledger.holdings} onOpenMarket={openMarket} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.chat}><OddpoolChatCard portfolio={portfolioCtx} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.whale}><WhaleCard /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.prices}><LivePricesCard assets={priceAssets} onOpenChart={openChart} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.news}><NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.hours}><MarketHoursCard /></MobileSlot>
+              {openMarkets.map((m) => (
+                <MobileSlot key={m.market_id} h={560}><MarketDetailCard market={m} onClose={() => closeMarket(m.market_id)} /></MobileSlot>
+              ))}
+              {openArticles.map((a) => (
+                <MobileSlot key={a.id} h={600}><ArticleCard item={a} onClose={() => closeArticle(a.id)} /></MobileSlot>
+              ))}
+              {openCharts.map((c) => (
+                <MobileSlot key={c.ticker} h={340}><ChartCard symbol={c.ticker} name={c.name} onClose={() => closeChart(c.ticker)} /></MobileSlot>
+              ))}
+              {macroCard && (
+                <MobileSlot h={520}><MacroSignalsCard onClose={closeMacro} onOpenEvent={openMacroEvent} /></MobileSlot>
+              )}
+              {openMacroEvents.map((ev) => (
+                <MobileSlot key={ev.eventKey} h={560}><MacroEventCard event={ev} onClose={() => closeMacroEvent(ev.eventKey)} /></MobileSlot>
+              ))}
+              {openEvents.map((ev) => (
+                <MobileSlot key={ev.event_id} h={600}><EventDetailCard event={ev} onClose={() => closeEvent(ev.event_id)} onOpenMarket={openMarket} /></MobileSlot>
+              ))}
+              {search && (
+                <MobileSlot h={520}>
+                  <SearchCard mode={search.mode} onModeChange={(m) => setSearch((prev) => (prev ? { ...prev, mode: m } : prev))} onClose={() => setSearch(null)} onOpenEvent={openEvent} onOpenMarket={openMarket} />
+                </MobileSlot>
+              )}
+              {openSignals.map((a) => (
+                <MobileSlot key={a.id} h={520}><SignalSearchCard article={a} onClose={() => closeSignal(a.id)} onOpenEvent={openEvent} onOpenMarket={openMarket} /></MobileSlot>
+              ))}
+            </div>
+          </StaticLayoutContext.Provider>
+        ) : (
+          <div
+            ref={canvasRef}
+            onContextMenu={onCanvasContextMenu}
+            onPointerDown={startPan}
+            onPointerMove={movePan}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
+            className={`relative ${panning ? "cursor-grabbing" : "cursor-grab"}`}
+            style={{ width: canvasSize.w, height: canvasSize.h }}
+          >
+            {/* default positions/sizes come from the fill-height packer (computeHomeLayout) */}
             <LedgerCard data={ledger} editable={authed} onChange={setLedger} x={homeL.ledger.x} y={homeL.ledger.y} width={homeL.ledger.w} height={homeL.ledger.h} />
             <PortfolioMarketsCard holdings={ledger.holdings} x={homeL.markets.x} y={homeL.markets.y} width={homeL.markets.w} height={homeL.markets.h} onOpenMarket={openMarket} />
             <WhaleCard x={homeL.whale.x} y={homeL.whale.y} width={homeL.whale.w} height={homeL.whale.h} />
@@ -498,12 +593,6 @@ export function MonacoHome() {
             {openSignals.map((a) => (
               <SignalSearchCard key={a.id} article={a} x={a._x} y={a._y} onClose={() => closeSignal(a.id)} onOpenEvent={openEvent} onOpenMarket={openMarket} />
             ))}
-          </div>
-        ) : (
-          // Brief seed-load moment — land straight on the pre-seeded dashboard (the old
-          // upload-a-portfolio dropzone is gone; xlsx upload lives on in parsePortfolio).
-          <div className="flex h-full items-center justify-center">
-            <div className="dot-loader" role="status" aria-label="Loading portfolio" />
           </div>
         )}
       </main>

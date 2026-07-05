@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 export interface Box {
   x: number;
@@ -9,12 +9,18 @@ export interface Box {
   h: number;
 }
 
+// When true (mobile stack), movable cards render STATIC: they fill their in-flow
+// wrapper (`.static-card`), drag/resize are disabled, and nothing touches
+// localStorage — so phone visits can't scramble a desktop layout.
+export const StaticLayoutContext = createContext(false);
+
 // Shared z so the last-interacted card comes to the front.
 let zTop = 30;
 
 // Movable + resizable card with localStorage persistence (pointer-driven, no deps).
 // Position/size are restored from `thesis.layout.<id>` on mount, saved on release.
 export function useMovableCard(id: string, def: Box, opts?: { minW?: number; minH?: number }) {
+  const isStatic = useContext(StaticLayoutContext);
   const minW = opts?.minW ?? 340;
   const minH = opts?.minH ?? 220;
   const [box, setBox] = useState<Box>(def);
@@ -23,6 +29,7 @@ export function useMovableCard(id: string, def: Box, opts?: { minW?: number; min
   const rez = useRef<{ px: number; py: number; w: number; h: number } | null>(null);
 
   useEffect(() => {
+    if (isStatic) return; // static stack: box is ignored, don't read/follow anything
     if (drag.current || rez.current) return; // never re-place a card mid-interaction
     try {
       const s = localStorage.getItem("thesis.layout." + id);
@@ -37,7 +44,7 @@ export function useMovableCard(id: string, def: Box, opts?: { minW?: number; min
     // No saved layout → keep following the (responsive) default, so untouched cards
     // re-pack live when the computed home layout changes with the viewport.
     setBox({ x: def.x, y: def.y, w: def.w, h: def.h });
-  }, [id, def.x, def.y, def.w, def.h]);
+  }, [id, def.x, def.y, def.w, def.h, isStatic]);
 
   const save = (b: Box) => {
     try {
@@ -102,6 +109,13 @@ export function useMovableCard(id: string, def: Box, opts?: { minW?: number; min
       } catch {}
     },
   };
+
+  if (isStatic) {
+    // Fill the .static-card wrapper (position:relative, explicit height) in-flow.
+    const staticStyle: React.CSSProperties = { left: 0, top: 0, width: "100%", height: "100%", zIndex: 1 };
+    const none = {} as typeof dragHandle;
+    return { box, z: 1, raise: () => {}, style: staticStyle, dragHandle: none, resizeHandle: none };
+  }
 
   const style: React.CSSProperties = { left: box.x, top: box.y, width: box.w, height: box.h, zIndex: z };
   return { box, z, raise, style, dragHandle, resizeHandle };
