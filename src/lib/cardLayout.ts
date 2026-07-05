@@ -52,7 +52,7 @@ const MIN_SCALE = 0.6; // below this cards squash → add a column instead
 
 export function computeHomeLayout(viewportW: number, viewportH: number): Record<string, LayoutBox> {
   const margin = 40;
-  const gap = 20;
+  const gap = 8; // uniform space between cards (columns + stacked)
   const top = 110; // clears the floating nav pill
   const bottom = 20;
 
