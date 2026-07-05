@@ -1,0 +1,30 @@
+{
+  "version": "v1",
+  "note": "Connectors the decomposition prompt may reference. type: leading = early-warning signal; confirming = hard validation. The prompt may ONLY use source_ids that appear here. 'serves' lists the claim archetypes each source is good for.",
+  "sources": [
+    { "id": "polymarket", "name": "Polymarket", "type": "leading", "serves": ["macro", "policy", "regulatory", "event", "crypto"], "access": "free-api", "latency": "minutes", "notes": "Implied probability of an event. Semantic-match break conditions to live markets — often a market IS the break condition." },
+    { "id": "kalshi", "name": "Kalshi", "type": "leading", "serves": ["macro", "policy", "event"], "access": "free-api", "latency": "minutes", "notes": "CFTC-regulated. US econ prints: CPI, Fed decisions, jobs." },
+    { "id": "metaculus", "name": "Metaculus", "type": "leading", "serves": ["technology", "science", "timeline"], "access": "free-api", "latency": "daily", "notes": "Calibrated community forecasts. Best for tech/science milestones and timelines." },
+    { "id": "manifold", "name": "Manifold Markets", "type": "leading", "serves": ["technology", "company", "long-tail"], "access": "free-api", "latency": "hours", "notes": "Play-money but very broad long-tail coverage of niche company/tech questions." },
+    { "id": "google_trends", "name": "Google Trends", "type": "leading", "serves": ["demand", "attention", "consumer"], "access": "free-unofficial", "latency": "daily", "notes": "Search interest as a consumer-demand proxy (pytrends)." },
+    { "id": "wikipedia_pageviews", "name": "Wikipedia Pageviews", "type": "leading", "serves": ["attention", "consumer"], "access": "free-api", "latency": "daily", "notes": "Attention proxy; clean official API." },
+    { "id": "hacker_news", "name": "Hacker News (Algolia)", "type": "leading", "serves": ["technology", "moat", "developer", "sentiment"], "access": "free-api", "latency": "minutes", "notes": "Developer/tech adoption + sentiment." },
+    { "id": "reddit", "name": "Reddit (targeted subs)", "type": "leading", "serves": ["sentiment", "demand", "retail"], "access": "paid-api", "latency": "minutes", "notes": "High signal but API now paid/rate-limited. Use as a Watch trigger only — never the sole basis for a Broken state." },
+    { "id": "stocktwits", "name": "StockTwits", "type": "leading", "serves": ["sentiment", "retail"], "access": "api", "latency": "minutes", "notes": "Ticker-level retail sentiment; noisy." },
+    { "id": "github", "name": "GitHub", "type": "leading", "serves": ["moat", "developer", "adoption"], "access": "free-api", "latency": "daily", "notes": "Ecosystem-adoption proxy, e.g. CUDA vs ROCm vs Triton activity." },
+    { "id": "job_postings", "name": "Job Postings", "type": "leading", "serves": ["execution", "expansion", "strategy"], "access": "scrape-or-paid", "latency": "daily", "notes": "Hiring/layoffs as expansion/contraction and strategic-intent signal." },
+    { "id": "web_traffic", "name": "Web Traffic (Similarweb / Cloudflare Radar)", "type": "leading", "serves": ["demand", "product-usage"], "access": "freemium", "latency": "weekly", "notes": "Product-usage growth proxy." },
+    { "id": "app_rankings", "name": "App Store Rankings / Downloads", "type": "leading", "serves": ["demand", "consumer"], "access": "paid-or-partial-scrape", "latency": "daily", "notes": "Consumer app demand (e.g. Sensor Tower)." },
+    { "id": "onchain_smart_money", "name": "On-chain Labeled Wallets (Nansen / Arkham)", "type": "leading", "serves": ["crypto", "smart-money"], "access": "paid", "latency": "minutes", "notes": "Labeled wallets with track record — not generic whale noise." },
+    { "id": "exchange_flows", "name": "Exchange In/Outflows", "type": "leading", "serves": ["crypto", "supply-demand"], "access": "freemium", "latency": "minutes", "notes": "Inflows -> sell pressure; outflows -> accumulation." },
+    { "id": "options_flow", "name": "Unusual Options Activity", "type": "leading", "serves": ["positioning", "event-expectation"], "access": "paid", "latency": "intraday", "notes": "Volume/OI anomalies as smart-money positioning." },
+    { "id": "short_interest", "name": "Short Interest (FINRA)", "type": "leading", "serves": ["sentiment", "positioning"], "access": "free", "latency": "biweekly", "notes": "Lagged but leading-ish for squeeze/sentiment." },
+    { "id": "commodity_price", "name": "Commodity Spot/Term Price (LME / EIA / spot feeds)", "type": "confirming", "serves": ["commodity", "supply-demand"], "access": "freemium", "latency": "daily", "notes": "Direct commodity price (uranium, oil, metals). Added in v1 after eval gap." },
+    { "id": "sec_edgar", "name": "SEC EDGAR (10-K/Q, 8-K, Form 4)", "type": "confirming", "serves": ["fundamentals", "insider", "events", "regulatory"], "access": "free", "latency": "per-filing", "notes": "Hard numbers, insider trades, material events." },
+    { "id": "earnings", "name": "Earnings Reports & Transcripts", "type": "confirming", "serves": ["fundamentals", "guidance", "margin", "demand"], "access": "scrape-or-paid", "latency": "quarterly", "notes": "Guidance, capex, margin/ASP commentary, KPIs." },
+    { "id": "fred", "name": "FRED (Macro Series)", "type": "confirming", "serves": ["macro", "rates", "inflation"], "access": "free", "latency": "per-release", "notes": "Official macro series." },
+    { "id": "price_volume", "name": "Price & Volume (Polygon / Finnhub)", "type": "confirming", "serves": ["market-reaction"], "access": "freemium", "latency": "realtime", "notes": "Confirms market reaction. Never a claim by itself." },
+    { "id": "news", "name": "News (Finnhub / NewsAPI / GDELT)", "type": "confirming", "serves": ["events", "coincident"], "access": "freemium", "latency": "minutes", "notes": "Event confirmation; coincident, not leading." },
+    { "id": "sector_official", "name": "Sector Official (EIA / USDA / Baker Hughes / WNA)", "type": "confirming", "serves": ["commodity", "supply-demand"], "access": "free", "latency": "per-release", "notes": "Commodity fundamentals: energy, ag, rig counts, uranium." }
+  ]
+}

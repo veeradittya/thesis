@@ -1,0 +1,21 @@
+# Install on anton: sudo cp deploy/betathesis.service /etc/systemd/system/betathesis.service
+# then: sudo systemctl daemon-reload && sudo systemctl enable --now betathesis
+# NOTE: ExecStart assumes node at /usr/bin/node — verify with `which node` (nvm installs elsewhere).
+
+[Unit]
+Description=betathesis.com Next.js production server
+After=network.target
+
+[Service]
+Type=simple
+User=veer
+WorkingDirectory=/home/veer/betathesis/.next/standalone
+EnvironmentFile=/home/veer/betathesis/.env.production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

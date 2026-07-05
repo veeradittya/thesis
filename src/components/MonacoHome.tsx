@@ -1,0 +1,557 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useSession, signIn, signOut } from "next-auth/react";
+import { cn } from "@/lib/utils";
+import { LedgerCard } from "@/components/LedgerCard";
+import { PortfolioMarketsCard } from "@/components/PortfolioMarketsCard";
+import { MarketDetailCard, type OpenMarket } from "@/components/MarketDetailCard";
+import { WhaleCard } from "@/components/WhaleCard";
+import { OddpoolChatCard } from "@/components/OddpoolChatCard";
+import { MarketHoursCard } from "@/components/MarketHoursCard";
+import { NewsAlertCard } from "@/components/NewsAlertCard";
+import { ArticleCard } from "@/components/ArticleCard";
+import { LivePricesCard } from "@/components/LivePricesCard";
+import { ChartCard } from "@/components/ChartCard";
+import { MacroSignalsCard, type MacroEvent } from "@/components/MacroSignalsCard";
+import { MacroEventCard } from "@/components/MacroEventCard";
+import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
+import { EventDetailCard, type EventStub } from "@/components/EventDetailCard";
+import { SearchCard, type SearchMode } from "@/components/SearchCard";
+import { SignalSearchCard } from "@/components/SignalSearchCard";
+import { emptyLedger, type ParsedPortfolio } from "@/lib/parsePortfolio";
+import type { NewsItem } from "@/lib/guardian";
+import type { MarketLite } from "@/lib/oddpool";
+
+// Homepage restyled to Monaco (monaco.com): true-black canvas, Inter with -0.02em
+// tracking, near-white text, hairline borders, a white pill CTA. Nav items are ours.
+
+// Scrollable card canvas (cards persist their own position/size to localStorage).
+// CANVAS_W/H are the placement grid for findEmptySpot; the *displayed* canvas grows
+// dynamically to keep CANVAS_MARGIN of free space beyond the right/bottom-most card.
+const CANVAS_W = 2000;
+const CANVAS_H = 1500;
+const CANVAS_MARGIN = 400;
+const CANVAS_MIN_W = 1600;
+const CANVAS_MIN_H = 1000;
+
+// Map a holding's company name to a clean Guardian search term ("Amazon.com, Inc." → "Amazon").
+function cleanCompany(name: string): string {
+  return name
+    .replace(/[.,].*$/, "")
+    .replace(/\b(Corporation|Corp|Incorporated|Inc|Co|Company|Holdings?|Ltd|Limited|PLC|Group|Platforms|Technologies|Technology|The)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function MonacoHome() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [drag, setDrag] = useState(false);
+  const [ledger, setLedger] = useState<ParsedPortfolio | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  // Auth (Google sign-in) + the account dropdown.
+  const { data: session, status } = useSession();
+  const [acctMenu, setAcctMenu] = useState(false);
+  const userId = session?.user?.id ?? null;
+  const authed = !!userId; // authenticated client → editable, per-account, persisted ledger
+  const scope = authed ? `u.${userId}` : null; // localStorage namespace for this account
+  const firstName = (session?.user?.name || "").trim().split(/\s+/)[0] || null; // names the seeded ledger for a signed-in user
+
+  // Ephemeral "coming soon" pill for not-yet-built nav items.
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 1900);
+  };
+  const [openMarkets, setOpenMarkets] = useState<Array<OpenMarket & { _x: number; _y: number }>>([]);
+
+  // Find a free spot on the canvas for a new card (so it lands in empty space).
+  function findEmptySpot(w: number, h: number): { x: number; y: number } {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 80, y: 140 };
+    const cr = canvas.getBoundingClientRect();
+    const rects = [...canvas.querySelectorAll<HTMLElement>(".fade-in.absolute")].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left - cr.left, y: r.top - cr.top, w: r.width, h: r.height };
+    });
+    const pad = 16;
+    const hit = (x: number, y: number) =>
+      rects.some((r) => x < r.x + r.w + pad && x + w + pad > r.x && y < r.y + r.h + pad && y + h + pad > r.y);
+    for (let y = 20; y + h <= CANVAS_H; y += 40) for (let x = 20; x + w <= CANVAS_W; x += 40) if (!hit(x, y)) return { x, y };
+    return { x: 80, y: 140 };
+  }
+
+  // Keep CANVAS_MARGIN of free canvas beyond the right/bottom-most card at all times.
+  // A MutationObserver on the canvas catches cards being added/removed (childList) and
+  // moved/resized (their inline style changes), then re-sizes the canvas on the next frame.
+  const [canvasSize, setCanvasSize] = useState({ w: CANVAS_MIN_W, h: CANVAS_MIN_H });
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let raf = 0;
+    const recompute = () => {
+      raf = 0;
+      const cr = canvas.getBoundingClientRect();
+      let maxR = 0, maxB = 0;
+      for (const el of Array.from(canvas.children) as HTMLElement[]) {
+        if (!el.offsetWidth && !el.offsetHeight) continue;
+        const r = el.getBoundingClientRect();
+        maxR = Math.max(maxR, r.right - cr.left);
+        maxB = Math.max(maxB, r.bottom - cr.top);
+      }
+      const w = Math.max(CANVAS_MIN_W, Math.round(maxR) + CANVAS_MARGIN);
+      const h = Math.max(CANVAS_MIN_H, Math.round(maxB) + CANVAS_MARGIN);
+      setCanvasSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h })); // bail if unchanged (no observer loop)
+    };
+    const schedule = () => { if (!raf) raf = window.setTimeout(recompute, 32); }; // coalesce bursts; setTimeout fires even when rAF is throttled
+    const mo = new MutationObserver(schedule);
+    mo.observe(canvas, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    schedule();
+    return () => { mo.disconnect(); if (raf) clearTimeout(raf); };
+  }, [ledger]); // (re)attach once the canvas actually mounts (it renders only when `ledger` is set)
+
+  function openMarket(m: MarketLite, ticker: string) {
+    setOpenMarkets((prev) => {
+      if (prev.some((p) => p.market_id === m.market_id)) return prev;
+      const spot = findEmptySpot(460, 540);
+      return [...prev, { ...m, ticker, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeMarket(id: string) {
+    setOpenMarkets((prev) => prev.filter((p) => p.market_id !== id));
+  }
+
+  const [openArticles, setOpenArticles] = useState<Array<NewsItem & { _x: number; _y: number }>>([]);
+  function openArticle(item: NewsItem) {
+    setOpenArticles((prev) => {
+      if (prev.some((p) => p.id === item.id)) return prev;
+      const spot = findEmptySpot(480, 600);
+      return [...prev, { ...item, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeArticle(id: string) {
+    setOpenArticles((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  const [openCharts, setOpenCharts] = useState<Array<{ ticker: string; name: string | null; _x: number; _y: number }>>([]);
+  function openChart(asset: { ticker: string; name: string | null }) {
+    setOpenCharts((prev) => {
+      if (prev.some((p) => p.ticker === asset.ticker)) return prev;
+      const spot = findEmptySpot(560, 340);
+      return [...prev, { ...asset, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeChart(ticker: string) {
+    setOpenCharts((prev) => prev.filter((p) => p.ticker !== ticker));
+  }
+
+  // Global right-click menu + the cards it can spawn.
+  const [menu, setMenu] = useState<{ vx: number; vy: number; cx: number; cy: number } | null>(null);
+  const [macroCard, setMacroCard] = useState<{ x: number; y: number } | null>(null);
+  function onCanvasContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const cr = canvasRef.current?.getBoundingClientRect();
+    setMenu({ vx: e.clientX, vy: e.clientY, cx: cr ? e.clientX - cr.left : 80, cy: cr ? e.clientY - cr.top : 140 });
+  }
+  function openMacro(cx: number, cy: number) {
+    setMacroCard((prev) => prev ?? { x: Math.max(20, cx), y: Math.max(20, cy) });
+    try { localStorage.setItem("thesis.macro.open", "1"); } catch {}
+  }
+  function closeMacro() {
+    setMacroCard(null);
+    try { localStorage.removeItem("thesis.macro.open"); } catch {}
+  }
+  // Restore the Macro Signals card if it was left open (persists on the Portfolio page until closed).
+  useEffect(() => {
+    try { if (localStorage.getItem("thesis.macro.open") === "1") setMacroCard((p) => p ?? { x: 560, y: 180 }); } catch {}
+  }, []);
+
+  // Macro event detail cards (spawned by clicking a row in the Macro Signals card).
+  const [openMacroEvents, setOpenMacroEvents] = useState<Array<MacroEvent & { _x: number; _y: number }>>([]);
+  function openMacroEvent(ev: MacroEvent) {
+    setOpenMacroEvents((prev) => {
+      if (prev.some((p) => p.eventKey === ev.eventKey)) return prev;
+      const spot = findEmptySpot(460, 560);
+      return [...prev, { ...ev, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeMacroEvent(key: string) {
+    setOpenMacroEvents((prev) => prev.filter((p) => p.eventKey !== key));
+  }
+
+  // Prediction-market event detail cards (Search → Events). Validation stub = one real event.
+  const [openEvents, setOpenEvents] = useState<Array<EventStub & { _x: number; _y: number }>>([]);
+  function openEvent(ev: EventStub) {
+    setOpenEvents((prev) => {
+      if (prev.some((p) => p.event_id === ev.event_id)) return prev;
+      const spot = findEmptySpot(480, 600);
+      return [...prev, { ...ev, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeEvent(id: string) {
+    setOpenEvents((prev) => prev.filter((p) => p.event_id !== id));
+  }
+
+  // Prediction-market Search card (single instance; Events/Markets modes).
+  const [search, setSearch] = useState<{ mode: SearchMode; x: number; y: number } | null>(null);
+  function openSearch(mode: SearchMode, sx: number, sy: number) {
+    setSearch((prev) => (prev ? { ...prev, mode } : { mode, x: sx, y: sy }));
+  }
+
+  // Signal-search cards — right-click a headline → "Find Signals". One card per article.
+  const [openSignals, setOpenSignals] = useState<Array<NewsItem & { _x: number; _y: number }>>([]);
+  function openSignalSearch(item: NewsItem) {
+    setOpenSignals((prev) => {
+      if (prev.some((p) => p.id === item.id)) return prev;
+      const spot = findEmptySpot(440, 500);
+      return [...prev, { ...item, _x: spot.x, _y: spot.y }];
+    });
+  }
+  function closeSignal(id: string) {
+    setOpenSignals((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  // Persist the Search card and the event/market cards it spawns, so they survive reloads
+  // until manually closed. (Per-card position/size is already persisted by useMovableCard;
+  // here we persist *which* cards are open.) Restore on mount, then write on change — the
+  // `hydrated` gate stops the initial empty state from clobbering the saved cards.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    try {
+      const m = JSON.parse(localStorage.getItem("thesis.markets.open") || "[]");
+      if (Array.isArray(m) && m.length) setOpenMarkets(m);
+      const e = JSON.parse(localStorage.getItem("thesis.events.open") || "[]");
+      if (Array.isArray(e) && e.length) setOpenEvents(e);
+      const s = localStorage.getItem("thesis.search.open");
+      if (s === "events" || s === "markets") setSearch({ mode: s, x: 260, y: 130 });
+      const g = JSON.parse(localStorage.getItem("thesis.signals.open") || "[]");
+      if (Array.isArray(g) && g.length) setOpenSignals(g);
+    } catch {}
+    setHydrated(true);
+  }, []);
+  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.markets.open", JSON.stringify(openMarkets)); } catch {} }, [openMarkets, hydrated]);
+  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.events.open", JSON.stringify(openEvents)); } catch {} }, [openEvents, hydrated]);
+  useEffect(() => { if (hydrated) try { localStorage.setItem("thesis.signals.open", JSON.stringify(openSignals)); } catch {} }, [openSignals, hydrated]);
+  useEffect(() => { if (hydrated) try { if (search) localStorage.setItem("thesis.search.open", search.mode); else localStorage.removeItem("thesis.search.open"); } catch {} }, [search, hydrated]);
+
+  const menuItems: MenuItem[] = [
+    {
+      label: "Prediction Markets",
+      children: [
+        { label: "Macro Signals", onClick: () => menu && openMacro(menu.cx, menu.cy) },
+        {
+          label: "Search",
+          children: [
+            { label: "Events", onClick: () => menu && openSearch("events", menu.cx, menu.cy) },
+            { label: "Markets", onClick: () => menu && openSearch("markets", menu.cx, menu.cy) },
+          ],
+        },
+      ],
+    },
+  ];
+
+  async function take(files: FileList | null) {
+    const f = files?.[0];
+    if (!f) return;
+    setFile(f);
+    setParseError(null);
+    setParsing(true);
+    try {
+      // Dynamic import keeps the ~1MB xlsx parser out of the initial bundle.
+      const { parsePortfolioFile } = await import("@/lib/parsePortfolio");
+      setLedger(await parsePortfolioFile(f));
+    } catch (e) {
+      setLedger(null);
+      setParseError(e instanceof Error ? e.message : "Couldn't read that spreadsheet.");
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  // Ledger source, auth-gated:
+  //  • guest → seed the read-only PanAgora demo (ephemeral, never persisted to an account)
+  //  • authenticated → restore this account's cached ledger, else start empty (they add holdings)
+  // `ledgerScope` tracks which scope the loaded ledger belongs to, so the persist effect below
+  // only writes an authed user's OWN ledger (and never before its restore completes).
+  const [ledgerScope, setLedgerScope] = useState<string | null>(null);
+  useEffect(() => {
+    if (status === "loading") return; // wait for the session to resolve before choosing a source
+    let cancelled = false;
+    const seedPanAgora = async (): Promise<ParsedPortfolio | null> => {
+      try {
+        const res = await fetch("/panagora.xlsx");
+        if (!res.ok) return null;
+        const ab = await res.arrayBuffer();
+        const { parsePortfolioBuffer } = await import("@/lib/parsePortfolio");
+        return parsePortfolioBuffer(ab, "PanAgora_Top10_13F_Q1_2026.xlsx");
+      } catch { return null; }
+    };
+    (async () => {
+      if (authed && scope) {
+        try {
+          const saved = localStorage.getItem(`thesis.${scope}.ledger`);
+          if (saved) {
+            const p = JSON.parse(saved);
+            if (!cancelled && p && Array.isArray(p.holdings)) { setLedger(p); setLedgerScope(scope); return; }
+          }
+        } catch {}
+        // first sign-in → start from the PanAgora seed (editable), named after the user; edits persist per-account
+        const seed = (await seedPanAgora()) ?? emptyLedger();
+        if (!cancelled) { setLedger(firstName ? { ...seed, portfolioName: firstName } : seed); setLedgerScope(scope); }
+      } else {
+        const seed = await seedPanAgora(); // guest → read-only demo, ephemeral
+        if (!cancelled && seed) { setLedger(seed); setLedgerScope("guest"); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [status, authed, scope, firstName]);
+
+  // Persist an authenticated user's ledger to their namespace (edits, uploads). Guarded on
+  // `ledgerScope === scope` so we never save before restore, or save one account's ledger under another.
+  useEffect(() => {
+    if (!authed || !scope || ledgerScope !== scope || !ledger) return;
+    try { localStorage.setItem(`thesis.${scope}.ledger`, JSON.stringify(ledger)); } catch {}
+  }, [ledger, authed, scope, ledgerScope]);
+
+  // Monaco's exact .text-nav: Inter, grey-light #f6f6f6, fluid size + tracking.
+  const navText = {
+    fontFamily: "var(--font-inter)",
+    color: "#f6f6f6",
+    fontWeight: 400,
+    lineHeight: 1.6,
+    fontSize: "clamp(12px, calc(7.43px + 0.446vw), 16px)",
+    letterSpacing: "clamp(-0.32px, calc(-0.103px - 0.009vw), -0.24px)",
+  };
+
+  // Compact portfolio context handed to the chat assistant.
+  const portfolioCtx = ledger
+    ? `Portfolio "${ledger.portfolioName}". Holdings (ticker, weight): ${ledger.holdings
+        .slice(0, 15)
+        .map((h) => `${h.ticker}${h.weight != null ? ` ${(h.weight * 100).toFixed(1)}%` : ""}`)
+        .join("; ")}.`
+    : undefined;
+
+  // Guardian search query built from the portfolio's company names for the news card.
+  const newsQuery = ledger
+    ? ledger.holdings
+        .slice(0, 8)
+        .map((h) => cleanCompany(h.name || h.ticker))
+        .filter(Boolean)
+        .map((n) => `"${n}"`)
+        .join(" OR ")
+    : "";
+
+  // Tickers for the live-prices websocket card.
+  const priceAssets = ledger
+    ? ledger.holdings.slice(0, 12).map((h) => ({ ticker: h.ticker, name: h.name ?? null })).filter((a) => a.ticker)
+    : [];
+
+  return (
+    <div className="flex h-screen flex-col bg-black font-sans tracking-[-0.02em] text-[#fafafa] antialiased">
+      {/* ── Nav: exact Monaco floating liquid-glass pill ───── */}
+      <header className="pointer-events-none fixed inset-x-0 top-6 z-50 w-full px-4">
+        <div className="mx-auto flex w-full max-w-[1920px] flex-col items-center">
+          <div
+            className="pointer-events-auto relative flex items-center rounded-[16px] transition-all duration-300"
+            style={{
+              width: "min(100%, 855px)",
+              height: 55,
+              backgroundColor: "#3a3a3a66",
+              backdropFilter: "blur(24px)",
+              WebkitBackdropFilter: "blur(24px)",
+            }}
+          >
+            {/* left links */}
+            <nav className="flex flex-1 shrink-0 items-center justify-start gap-8 pl-[25px]">
+              <button
+                onClick={() => mainRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" })}
+                style={navText}
+                className="capitalize opacity-80 transition-opacity hover:opacity-100"
+              >
+                Portfolio
+              </button>
+              <button onClick={() => showToast("Plays — coming soon")} style={navText} className="capitalize opacity-80 transition-opacity hover:opacity-100">
+                Plays
+              </button>
+            </nav>
+
+            {/* center logo — serif all-caps wordmark (Monaco style) */}
+            <button
+              className="absolute left-1/2 z-10 -translate-x-1/2 text-white"
+              style={{ fontFamily: "var(--font-serif), Georgia, serif", fontSize: 26, fontWeight: 500, letterSpacing: "0.05em", lineHeight: 1 }}
+            >
+              THESIS
+            </button>
+
+            {/* right actions — Dispatch (text), then Log in / account (oval pill, extreme right) */}
+            <div className="flex flex-1 shrink-0 items-center justify-end gap-8 pr-[25px]">
+              <button onClick={() => showToast("Dispatch — coming soon")} style={navText} className="opacity-80 transition-opacity hover:opacity-100">
+                Dispatch
+              </button>
+              {session?.user ? (
+                <div className="relative">
+                  <button
+                    onClick={() => setAcctMenu((v) => !v)}
+                    title={session.user.email ?? session.user.name ?? "Account"}
+                    className="grid h-10 w-10 place-items-center overflow-hidden rounded-full bg-white/10 text-[13px] font-medium text-white ring-1 ring-white/15 transition-colors hover:ring-white/40"
+                  >
+                    {session.user.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={session.user.image} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      (session.user.name ?? session.user.email ?? "U").slice(0, 1).toUpperCase()
+                    )}
+                  </button>
+                  {acctMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setAcctMenu(false)} />
+                      <div className="absolute right-0 top-[46px] z-50 w-56 overflow-hidden rounded-[14px] border border-white/10 bg-[#141414]/95 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur">
+                        <div className="border-b border-white/[0.06] px-4 py-3">
+                          <p className="truncate text-[12.5px] font-medium text-white">{session.user.name ?? "Signed in"}</p>
+                          {session.user.email && <p className="truncate text-[11px] text-[#8a8a8a]">{session.user.email}</p>}
+                        </div>
+                        <button
+                          onClick={() => { setAcctMenu(false); signOut(); }}
+                          className="block w-full px-4 py-2.5 text-left text-[12.5px] text-white/85 transition-colors hover:bg-white/[0.06] hover:text-white"
+                        >
+                          Sign out
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => signIn("google")}
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-[42px] bg-black text-white transition-colors hover:bg-white hover:text-black"
+                  style={{
+                    height: 40,
+                    padding: "9px 16px",
+                    fontWeight: 400,
+                    lineHeight: 1.4,
+                    fontSize: "clamp(12px, calc(7.43px + 0.446vw), 16px)",
+                    letterSpacing: "clamp(-0.32px, calc(-0.103px - 0.009vw), -0.24px)",
+                  }}
+                >
+                  Log in
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ephemeral "coming soon" pill for not-yet-built nav items */}
+      {toast && (
+        <div className="pointer-events-none fixed inset-x-0 top-[92px] z-[60] flex justify-center">
+          <div className="fade-in rounded-full border border-white/10 bg-[#1a1a1a]/90 px-4 py-2 text-[12.5px] text-white/90 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur">
+            {toast}
+          </div>
+        </div>
+      )}
+
+      {/* ── Body: PanAgora ledger (seeded) as a movable/resizable card ── */}
+      <main ref={mainRef} className="no-scrollbar relative flex-1 overflow-auto">
+        {ledger ? (
+          <div ref={canvasRef} onContextMenu={onCanvasContextMenu} className="relative" style={{ width: canvasSize.w, height: canvasSize.h }}>
+            <LedgerCard data={ledger} editable={authed} onChange={setLedger} x={40} y={110} width={460} height={470} />
+            <PortfolioMarketsCard holdings={ledger.holdings} x={530} y={110} width={520} height={560} onOpenMarket={openMarket} />
+            <WhaleCard x={40} y={680} width={1010} height={300} />
+            <OddpoolChatCard portfolio={portfolioCtx} x={1080} y={110} width={460} height={560} />
+            <MarketHoursCard x={1080} y={690} width={300} height={116} />
+            <NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} x={1080} y={826} width={430} height={560} />
+            <LivePricesCard assets={priceAssets} onOpenChart={openChart} x={1560} y={110} width={360} height={500} />
+            {openMarkets.map((m) => (
+              <MarketDetailCard key={m.market_id} market={m} x={m._x} y={m._y} onClose={() => closeMarket(m.market_id)} />
+            ))}
+            {openArticles.map((a) => (
+              <ArticleCard key={a.id} item={a} x={a._x} y={a._y} onClose={() => closeArticle(a.id)} />
+            ))}
+            {openCharts.map((c) => (
+              <ChartCard key={c.ticker} symbol={c.ticker} name={c.name} x={c._x} y={c._y} onClose={() => closeChart(c.ticker)} />
+            ))}
+            {macroCard && <MacroSignalsCard x={macroCard.x} y={macroCard.y} onClose={closeMacro} onOpenEvent={openMacroEvent} />}
+            {openMacroEvents.map((ev) => (
+              <MacroEventCard key={ev.eventKey} event={ev} x={ev._x} y={ev._y} onClose={() => closeMacroEvent(ev.eventKey)} />
+            ))}
+            {openEvents.map((ev) => (
+              <EventDetailCard key={ev.event_id} event={ev} x={ev._x} y={ev._y} onClose={() => closeEvent(ev.event_id)} onOpenMarket={openMarket} />
+            ))}
+            {search && (
+              <SearchCard
+                mode={search.mode}
+                onModeChange={(m) => setSearch((prev) => (prev ? { ...prev, mode: m } : prev))}
+                x={search.x}
+                y={search.y}
+                onClose={() => setSearch(null)}
+                onOpenEvent={openEvent}
+                onOpenMarket={openMarket}
+              />
+            )}
+            {openSignals.map((a) => (
+              <SignalSearchCard key={a.id} article={a} x={a._x} y={a._y} onClose={() => closeSignal(a.id)} onOpenEvent={openEvent} onOpenMarket={openMarket} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center px-6 pt-24">
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDrag(true);
+              }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDrag(false);
+                take(e.dataTransfer.files);
+              }}
+              className={cn(
+                "flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-dashed px-10 py-14 text-center transition-colors",
+                drag ? "border-white/40 bg-[#181818]" : "border-white/15 bg-[#0a0a0a]",
+              )}
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-[#181818]">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b0b0b0" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 16V4M12 4l-4 4M12 4l4 4" />
+                  <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+                </svg>
+              </span>
+
+              <div>
+                <p className="text-[15px] text-white">Upload your portfolio</p>
+                <p className="mt-1 text-[13px] text-[#8a8a8a]">Drop an .xlsx file here, or browse to begin</p>
+              </div>
+
+              <button
+                onClick={() => inputRef.current?.click()}
+                className="rounded-full bg-white px-5 py-2 text-[13px] font-medium text-black transition-colors hover:bg-[#e6e6e6]"
+              >
+                Upload .xlsx
+              </button>
+
+              {parsing && <p className="text-[12px] text-[#b0b0b0]">Parsing {file?.name}…</p>}
+              {parseError && <p className="text-[12px] text-[#ff6b6b]">{parseError}</p>}
+
+              <input
+                ref={inputRef}
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                hidden
+                onChange={(e) => take(e.target.files)}
+              />
+            </div>
+          </div>
+        )}
+      </main>
+
+      {menu && <ContextMenu x={menu.vx} y={menu.vy} items={menuItems} onClose={() => setMenu(null)} />}
+    </div>
+  );
+}

@@ -1,0 +1,41 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files — keep only *.example tracked; NEVER commit real secrets (the anton
+# redeploy loop is `git pull`, so a committed .env.production would leak to the git host)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# plaid local token store (server-side secret)
+.plaid-store.json
+
+# cloudflare tunnel credentials (per-machine secret)
+/.cloudflared/
+*.cfargotunnel.json
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# vercel
+.vercel
