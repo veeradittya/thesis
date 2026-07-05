@@ -41,27 +41,28 @@ Ask the user to confirm each is done:
 
 Do not proceed to Step 2 until `dig NS betathesis.com +short` shows the Cloudflare nameservers.
 
-## Step 2 — 🟢 Cloudflare Tunnel
+## Step 2 — Cloudflare Tunnel (token / dashboard-managed)
 
+**🔴 HUMAN — in the Cloudflare dashboard (one-time):**
+1. Dashboard → **Zero Trust** (first time: pick a team name; Free plan — may ask for a card even though $0).
+2. **Networks → Tunnels → Create a tunnel → Cloudflared** → name it `betathesis` → Save.
+3. On the "Install connector" screen, **copy the token** — the long `eyJ…` string in the shown
+   `cloudflared service install eyJ…` command. **This is a secret; hand it to the anton operator
+   privately (do NOT commit it).** Don't install from this screen; anton runs it.
+4. **Public Hostnames → Add a public hostname** (twice):
+   - Subdomain *(blank)*, Domain `betathesis.com`, Type **HTTP**, URL `localhost:3000`.
+   - Subdomain `www`, Domain `betathesis.com`, Type **HTTP**, URL `localhost:3000`.
+   These auto-create the proxied CNAMEs in DNS. Delete any leftover placeholder A record for `@`.
+
+**🟢 YOU — on anton (the token is passed in; no `tunnel login`, no config.yml):**
 ```bash
 curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
 sudo dpkg -i /tmp/cloudflared.deb && cloudflared --version
-cloudflared tunnel login        # 🔴 HUMAN clicks the printed link, logs in, picks betathesis.com
-cloudflared tunnel create betathesis   # note the UUID; creds land at ~/.cloudflared/<UUID>.json
+sudo cloudflared service install <TOKEN>     # installs + starts the systemd connector with the token baked in
+systemctl status cloudflared --no-pager | head -5
 ```
-Write `~/.cloudflared/config.yml` from `deploy/cloudflared-config.yml`, replacing `<UUID>`:
-```bash
-sed "s/<UUID>/$(ls ~/.cloudflared/*.json | xargs -n1 basename | sed 's/.json//' | head -1)/" \
-  deploy/cloudflared-config.yml > ~/.cloudflared/config.yml
-cat ~/.cloudflared/config.yml   # sanity-check
-```
-Route DNS + install service:
-```bash
-cloudflared tunnel route dns betathesis betathesis.com
-cloudflared tunnel route dns betathesis www.betathesis.com
-sudo cloudflared service install
-sudo systemctl enable --now cloudflared && systemctl status cloudflared --no-pager | head -5
-```
+Verify the tunnel shows **Healthy** in the dashboard (Networks → Tunnels). It serves 200s once the app
+is up on `localhost:3000` (Step 3). Nothing to give anton for the tunnel except **`<TOKEN>`** + sudo.
 
 ## Step 3 — 🟢 Build & run the app
 
