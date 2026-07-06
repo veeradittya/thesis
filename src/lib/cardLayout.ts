@@ -28,6 +28,8 @@ export const MOBILE_BREAKPOINT = 768;
 const HOME_CARDS: Array<{ key: string; h: number; min: number }> = [
   { key: "ledger", h: 470, min: 260 },
   { key: "markets", h: 560, min: 300 },
+  { key: "macro", h: 520, min: 300 },
+  { key: "search", h: 540, min: 320 },
   { key: "chat", h: 560, min: 300 },
   { key: "whale", h: 420, min: 260 },
   { key: "prices", h: 500, min: 260 },
@@ -39,6 +41,8 @@ const HOME_CARDS: Array<{ key: string; h: number; min: number }> = [
 export const MOBILE_CARD_HEIGHTS: Record<string, number> = {
   ledger: 470,
   markets: 540,
+  macro: 520,
+  search: 540,
   chat: 500,
   whale: 430,
   prices: 480,
@@ -94,14 +98,27 @@ export function computeHomeLayout(viewportW: number, viewportH: number): Record<
     const scale = inner / picked.sums[ci];
     // Scale to fill the column exactly; enforce per-card minimums by taking the excess
     // out of the tallest card, and pin the last card to the exact bottom edge.
-    let heights = col.map((c) => Math.max(c.min, Math.round(c.h * scale)));
-    let excess = heights.reduce((s, h) => s + h, 0) - inner;
-    if (excess !== 0) {
-      const iTall = heights.indexOf(Math.max(...heights));
-      heights[iTall] = Math.max(col[iTall].min, heights[iTall] - excess);
+    const heights = col.map((c) => Math.max(c.min, Math.round(c.h * scale)));
+    const sum = () => heights.reduce((s, h) => s + h, 0);
+    // Remove any positive excess by shrinking the tallest card with headroom above its min,
+    // iterating so a card that bottoms out at its min hands the remainder to the next-tallest.
+    // (A single tallest card often can't absorb it all, which would spill the column past the edge.)
+    let excess = sum() - inner;
+    for (let guard = 0; excess > 0 && guard < 100; guard++) {
+      let idx = -1;
+      let best = -1;
+      for (let i = 0; i < heights.length; i++) {
+        if (heights[i] > col[i].min && heights[i] > best) { best = heights[i]; idx = i; }
+      }
+      if (idx < 0) break; // every card already at its min — can't shrink further
+      const take = Math.min(excess, heights[idx] - col[idx].min);
+      heights[idx] -= take;
+      excess -= take;
     }
-    excess = heights.reduce((s, h) => s + h, 0) - inner;
-    if (excess < 0) heights[heights.length - 1] -= excess; // stretch last card to the edge
+    // Negative excess (cards clamped up to their mins sum short) → stretch the last card so the
+    // column still ends exactly at the bottom edge.
+    excess = sum() - inner;
+    if (excess < 0) heights[heights.length - 1] -= excess;
 
     let y = top;
     col.forEach((c, ri) => {

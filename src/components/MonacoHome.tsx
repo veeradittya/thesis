@@ -56,6 +56,20 @@ function MobileSlot({ h, children }: { h: number; children: React.ReactNode }) {
   );
 }
 
+// One-time migration: Macro Signals + Search used to be right-click spawns positioned at the
+// cursor and are now PRE-SEEDED core cards laid out by the packer. Drop any stale per-card box a
+// prior session saved for them (thesis.layout.{macro,search}) so they adopt the computed layout.
+// Runs once per browser at module load — before any card mounts and restores its saved box.
+if (typeof window !== "undefined") {
+  try {
+    if (!localStorage.getItem("thesis.preseed.v1")) {
+      localStorage.removeItem("thesis.layout.macro");
+      localStorage.removeItem("thesis.layout.search");
+      localStorage.setItem("thesis.preseed.v1", "1");
+    }
+  } catch {}
+}
+
 export function MonacoHome() {
   const [ledger, setLedger] = useState<ParsedPortfolio | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -210,25 +224,15 @@ export function MonacoHome() {
   }
 
   // Global right-click menu + the cards it can spawn.
-  const [menu, setMenu] = useState<{ vx: number; vy: number; cx: number; cy: number } | null>(null);
-  const [macroCard, setMacroCard] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ vx: number; vy: number } | null>(null);
+  // Macro Signals is PRE-SEEDED on the dashboard (open by default); closing persists a dismissal.
+  const [macroOpen, setMacroOpen] = useState(true);
   function onCanvasContextMenu(e: React.MouseEvent) {
     e.preventDefault();
-    const cr = canvasRef.current?.getBoundingClientRect();
-    setMenu({ vx: e.clientX, vy: e.clientY, cx: cr ? e.clientX - cr.left : 80, cy: cr ? e.clientY - cr.top : 140 });
+    setMenu({ vx: e.clientX, vy: e.clientY });
   }
-  function openMacro(cx: number, cy: number) {
-    setMacroCard((prev) => prev ?? { x: Math.max(20, cx), y: Math.max(20, cy) });
-    try { localStorage.setItem("thesis.macro.open", "1"); } catch {}
-  }
-  function closeMacro() {
-    setMacroCard(null);
-    try { localStorage.removeItem("thesis.macro.open"); } catch {}
-  }
-  // Restore the Macro Signals card if it was left open (persists on the Portfolio page until closed).
-  useEffect(() => {
-    try { if (localStorage.getItem("thesis.macro.open") === "1") setMacroCard((p) => p ?? { x: 560, y: 180 }); } catch {}
-  }, []);
+  const openMacro = () => setMacroOpen(true); // re-open from the right-click menu
+  const closeMacro = () => setMacroOpen(false); // dismissal persisted by the effect below (desktop only)
 
   // Macro event detail cards (spawned by clicking a row in the Macro Signals card).
   const [openMacroEvents, setOpenMacroEvents] = useState<Array<MacroEvent & { _x: number; _y: number }>>([]);
@@ -256,11 +260,11 @@ export function MonacoHome() {
     setOpenEvents((prev) => prev.filter((p) => p.event_id !== id));
   }
 
-  // Prediction-market Search card (single instance; Events/Markets modes).
-  const [search, setSearch] = useState<{ mode: SearchMode; x: number; y: number } | null>(null);
-  function openSearch(mode: SearchMode, sx: number, sy: number) {
-    setSearch((prev) => (prev ? { ...prev, mode } : { mode, x: sx, y: sy }));
-  }
+  // Prediction-market Search card — PRE-SEEDED on the dashboard (open in "markets" mode by default;
+  // closing persists a dismissal). Single instance; Events/Markets modes.
+  const [search, setSearch] = useState<{ mode: SearchMode } | null>({ mode: "markets" });
+  const openSearch = (mode: SearchMode) => setSearch({ mode }); // (re-)open from the right-click menu
+  const closeSearch = () => setSearch(null);
 
   // Signal-search cards — right-click a headline → "Find Signals". One card per article.
   const [openSignals, setOpenSignals] = useState<Array<NewsItem & { _x: number; _y: number }>>([]);
@@ -286,8 +290,11 @@ export function MonacoHome() {
       if (Array.isArray(m) && m.length) setOpenMarkets(m);
       const e = JSON.parse(localStorage.getItem("thesis.events.open") || "[]");
       if (Array.isArray(e) && e.length) setOpenEvents(e);
+      const macroV = localStorage.getItem("thesis.macro.open");
+      if (macroV === "0") setMacroOpen(false); // pre-seeded, but the user dismissed it
       const s = localStorage.getItem("thesis.search.open");
-      if (s === "events" || s === "markets") setSearch({ mode: s, x: 260, y: 130 });
+      if (s === "closed") setSearch(null); // pre-seeded, but the user dismissed it
+      else if (s === "events" || s === "markets") setSearch({ mode: s });
       const g = JSON.parse(localStorage.getItem("thesis.signals.open") || "[]");
       if (Array.isArray(g) && g.length) setOpenSignals(g);
     } catch {}
@@ -300,18 +307,19 @@ export function MonacoHome() {
   useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.markets.open", JSON.stringify(openMarkets)); } catch {} }, [openMarkets, hydrated]);
   useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.events.open", JSON.stringify(openEvents)); } catch {} }, [openEvents, hydrated]);
   useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.signals.open", JSON.stringify(openSignals)); } catch {} }, [openSignals, hydrated]);
-  useEffect(() => { if (hydrated && !isMobileRef.current) try { if (search) localStorage.setItem("thesis.search.open", search.mode); else localStorage.removeItem("thesis.search.open"); } catch {} }, [search, hydrated]);
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.macro.open", macroOpen ? "1" : "0"); } catch {} }, [macroOpen, hydrated]);
+  useEffect(() => { if (hydrated && !isMobileRef.current) try { localStorage.setItem("thesis.search.open", search ? search.mode : "closed"); } catch {} }, [search, hydrated]);
 
   const menuItems: MenuItem[] = [
     {
       label: "Prediction Markets",
       children: [
-        { label: "Macro Signals", onClick: () => menu && openMacro(menu.cx, menu.cy) },
+        { label: "Macro Signals", onClick: openMacro },
         {
           label: "Search",
           children: [
-            { label: "Events", onClick: () => menu && openSearch("events", menu.cx, menu.cy) },
-            { label: "Markets", onClick: () => menu && openSearch("markets", menu.cx, menu.cy) },
+            { label: "Events", onClick: () => openSearch("events") },
+            { label: "Markets", onClick: () => openSearch("markets") },
           ],
         },
       ],
@@ -516,38 +524,47 @@ export function MonacoHome() {
           <StaticLayoutContext.Provider value={true}>
             <div className="flex flex-col gap-3.5 px-3.5 pb-8 pt-24">
               <MobileSlot h={MOBILE_CARD_HEIGHTS.ledger}><LedgerCard data={ledger} editable={authed} onChange={setLedger} /></MobileSlot>
+
+              {/* Prediction-market trio (markets · macro · search) — each immediately followed by
+                  the cards it spawns, so a spawned card opens right after its origin card. */}
               <MobileSlot h={MOBILE_CARD_HEIGHTS.markets}><PortfolioMarketsCard holdings={ledger.holdings} onOpenMarket={openMarket} /></MobileSlot>
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.chat}><OddpoolChatCard portfolio={portfolioCtx} /></MobileSlot>
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.whale}><WhaleCard /></MobileSlot>
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.prices}><LivePricesCard assets={priceAssets} onOpenChart={openChart} /></MobileSlot>
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.news}><NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} /></MobileSlot>
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.hours}><MarketHoursCard /></MobileSlot>
               {openMarkets.map((m) => (
                 <MobileSlot key={m.market_id} h={560}><MarketDetailCard market={m} onClose={() => closeMarket(m.market_id)} /></MobileSlot>
               ))}
-              {openArticles.map((a) => (
-                <MobileSlot key={a.id} h={600}><ArticleCard item={a} onClose={() => closeArticle(a.id)} /></MobileSlot>
-              ))}
-              {openCharts.map((c) => (
-                <MobileSlot key={c.ticker} h={340}><ChartCard symbol={c.ticker} name={c.name} onClose={() => closeChart(c.ticker)} /></MobileSlot>
-              ))}
-              {macroCard && (
-                <MobileSlot h={520}><MacroSignalsCard onClose={closeMacro} onOpenEvent={openMacroEvent} /></MobileSlot>
+
+              {macroOpen && (
+                <MobileSlot h={MOBILE_CARD_HEIGHTS.macro}><MacroSignalsCard onClose={closeMacro} onOpenEvent={openMacroEvent} /></MobileSlot>
               )}
               {openMacroEvents.map((ev) => (
                 <MobileSlot key={ev.eventKey} h={560}><MacroEventCard event={ev} onClose={() => closeMacroEvent(ev.eventKey)} /></MobileSlot>
               ))}
+
+              {search && (
+                <MobileSlot h={MOBILE_CARD_HEIGHTS.search}>
+                  <SearchCard mode={search.mode} onModeChange={(m) => setSearch((prev) => (prev ? { ...prev, mode: m } : prev))} onClose={closeSearch} onOpenEvent={openEvent} onOpenMarket={openMarket} />
+                </MobileSlot>
+              )}
               {openEvents.map((ev) => (
                 <MobileSlot key={ev.event_id} h={600}><EventDetailCard event={ev} onClose={() => closeEvent(ev.event_id)} onOpenMarket={openMarket} /></MobileSlot>
               ))}
-              {search && (
-                <MobileSlot h={520}>
-                  <SearchCard mode={search.mode} onModeChange={(m) => setSearch((prev) => (prev ? { ...prev, mode: m } : prev))} onClose={() => setSearch(null)} onOpenEvent={openEvent} onOpenMarket={openMarket} />
-                </MobileSlot>
-              )}
+
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.chat}><OddpoolChatCard portfolio={portfolioCtx} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.whale}><WhaleCard /></MobileSlot>
+
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.prices}><LivePricesCard assets={priceAssets} onOpenChart={openChart} /></MobileSlot>
+              {openCharts.map((c) => (
+                <MobileSlot key={c.ticker} h={340}><ChartCard symbol={c.ticker} name={c.name} onClose={() => closeChart(c.ticker)} /></MobileSlot>
+              ))}
+
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.news}><NewsAlertCard query={newsQuery} onOpenArticle={openArticle} onFindSignals={openSignalSearch} /></MobileSlot>
+              {openArticles.map((a) => (
+                <MobileSlot key={a.id} h={600}><ArticleCard item={a} onClose={() => closeArticle(a.id)} /></MobileSlot>
+              ))}
               {openSignals.map((a) => (
                 <MobileSlot key={a.id} h={520}><SignalSearchCard article={a} onClose={() => closeSignal(a.id)} onOpenEvent={openEvent} onOpenMarket={openMarket} /></MobileSlot>
               ))}
+
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.hours}><MarketHoursCard /></MobileSlot>
             </div>
           </StaticLayoutContext.Provider>
         ) : (
@@ -578,7 +595,7 @@ export function MonacoHome() {
             {openCharts.map((c) => (
               <ChartCard key={c.ticker} symbol={c.ticker} name={c.name} x={c._x} y={c._y} onClose={() => closeChart(c.ticker)} />
             ))}
-            {macroCard && <MacroSignalsCard x={macroCard.x} y={macroCard.y} onClose={closeMacro} onOpenEvent={openMacroEvent} />}
+            {macroOpen && <MacroSignalsCard x={homeL.macro.x} y={homeL.macro.y} width={homeL.macro.w} height={homeL.macro.h} onClose={closeMacro} onOpenEvent={openMacroEvent} />}
             {openMacroEvents.map((ev) => (
               <MacroEventCard key={ev.eventKey} event={ev} x={ev._x} y={ev._y} onClose={() => closeMacroEvent(ev.eventKey)} />
             ))}
@@ -589,9 +606,11 @@ export function MonacoHome() {
               <SearchCard
                 mode={search.mode}
                 onModeChange={(m) => setSearch((prev) => (prev ? { ...prev, mode: m } : prev))}
-                x={search.x}
-                y={search.y}
-                onClose={() => setSearch(null)}
+                x={homeL.search.x}
+                y={homeL.search.y}
+                width={homeL.search.w}
+                height={homeL.search.h}
+                onClose={closeSearch}
                 onOpenEvent={openEvent}
                 onOpenMarket={openMarket}
               />

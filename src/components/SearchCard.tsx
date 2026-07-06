@@ -40,6 +40,8 @@ export function SearchCard({
   onModeChange,
   x = 260,
   y = 130,
+  width = 440,
+  height = 540,
   onClose,
   onOpenEvent,
   onOpenMarket,
@@ -48,11 +50,13 @@ export function SearchCard({
   onModeChange: (m: SearchMode) => void;
   x?: number;
   y?: number;
+  width?: number;
+  height?: number;
   onClose: () => void;
   onOpenEvent: (ev: EventStub) => void;
   onOpenMarket: (m: MarketLite, ticker: string) => void;
 }) {
-  const { style, dragHandle, resizeHandle, raise } = useMovableCard("search", { x, y, w: 440, h: 540 }, { minW: 340, minH: 320 });
+  const { style, dragHandle, resizeHandle, raise } = useMovableCard("search", { x, y, w: width, h: height }, { minW: 340, minH: 320 });
   const [q, setQ] = useState("");
   const [venue, setVenue] = useState("");
   const [status, setStatus] = useState("active");
