@@ -171,9 +171,9 @@ export function SearchCard({
       className="fade-in absolute flex flex-col overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#0e0e0e] font-sans tracking-[-0.01em] shadow-[0_24px_70px_rgba(0,0,0,0.6)]"
     >
       {/* header */}
-      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none border-b border-white/[0.06] px-5 pt-4 pb-3">
+      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none px-5 pt-4 pb-3">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] uppercase tracking-wider text-[#8a8a8a]">Prediction Markets · Search</p>
+          <h2 className="text-[16px] font-semibold text-white">Prediction Markets · Search</h2>
           <button onPointerDown={(e) => e.stopPropagation()} onClick={onClose} title="Close" className="-mr-1 rounded-md p-1 text-[#8a8a8a] transition-colors hover:bg-white/[0.06] hover:text-white">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
           </button>

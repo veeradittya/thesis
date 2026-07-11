@@ -1,9 +1,7 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  // Self-contained production server for the anton deploy (see deploy/README.md).
-  // Build emits .next/standalone/server.js; static assets are copied in by deploy.sh.
-  output: "standalone",
-};
+// Hosted on Vercel — no `output` setting needed (Vercel builds/serves Next natively).
+// (The old anton self-host used output: "standalone"; removed on the move to Vercel.)
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

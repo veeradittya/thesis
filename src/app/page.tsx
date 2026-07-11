@@ -1,6 +1,7 @@
-import { MonacoHome } from "@/components/MonacoHome";
+import { ThesisHome } from "@/components/ThesisHome";
 
-// The Monaco dashboard is the Portfolio page (replaces the previous app shell).
+// Daily AI thesis-health tracker (replaces the prediction-market card dashboard, which
+// lives on in git under src/components/MonacoHome.tsx).
 export default function Home() {
-  return <MonacoHome />;
+  return <ThesisHome />;
 }

@@ -80,9 +80,8 @@ export function OddpoolChatCard({
       className="fade-in absolute flex flex-col overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#0e0e0e] font-sans tracking-[-0.01em] shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
     >
       {/* header — drag handle */}
-      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none border-b border-white/[0.06] px-5 pt-4 pb-3">
-        <p className="text-[10px] uppercase tracking-wider text-[#8a8a8a]">Thesis Chat</p>
-        <h2 className="mt-1 text-[16px] font-semibold text-white">Ask the markets</h2>
+      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none px-5 pt-4 pb-3">
+        <h2 className="text-[16px] font-semibold text-white">Thesis Chat</h2>
       </div>
 
       {/* messages */}

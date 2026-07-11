@@ -61,9 +61,8 @@ export function WhaleCard({ x = 40, y = 680, width = 1010, height = 300 }: { x?:
       className="fade-in absolute flex flex-col overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#0e0e0e] font-sans tracking-[-0.01em] shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
     >
       {/* header — drag handle */}
-      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none border-b border-white/[0.06] px-5 pt-4 pb-3">
-        <p className="text-[10px] uppercase tracking-wider text-[#8a8a8a]">Whale Tracker</p>
-        <h2 className="mt-1 text-[16px] font-semibold text-white">Large trades</h2>
+      <div {...dragHandle} className="shrink-0 cursor-move touch-none select-none px-5 pt-4 pb-3">
+        <h2 className="text-[16px] font-semibold text-white">Whale Tracker</h2>
         {data && (
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg bg-white/[0.03] py-1.5">

@@ -124,8 +124,8 @@ export function LedgerCard({
       {/* header — drag handle */}
       <div {...dragHandle} className="flex shrink-0 cursor-move touch-none select-none items-start justify-between gap-4 px-5 pt-5 pb-3">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] uppercase tracking-wider text-[#8a8a8a]">Ledger</p>
-          {editing ? (
+          <h2 className="text-[16px] font-semibold text-white">Ledger</h2>
+          {editing && (
             <input
               value={nameDraft}
               onPointerDown={noop}
@@ -134,8 +134,6 @@ export function LedgerCard({
               className="mt-1 w-full rounded-md bg-white/[0.05] px-2 py-1 text-[15px] font-semibold text-white outline-none ring-1 ring-white/10 focus:ring-white/25"
               placeholder="Portfolio name"
             />
-          ) : (
-            <h2 className="mt-1 truncate text-[16px] font-semibold text-white">{data.portfolioName}</h2>
           )}
         </div>
         <div className="flex shrink-0 items-start gap-3">

@@ -119,10 +119,9 @@ export function LivePricesCard({
       className="fade-in absolute flex flex-col overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#0e0e0e] font-sans tracking-[-0.01em] shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
     >
       {/* header — drag handle */}
-      <div {...dragHandle} className="flex shrink-0 cursor-move touch-none select-none items-start justify-between gap-3 border-b border-white/[0.06] px-5 pt-4 pb-3">
+      <div {...dragHandle} className="flex shrink-0 cursor-move touch-none select-none items-start justify-between gap-3 px-5 pt-4 pb-3">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-[#8a8a8a]">Portfolio</p>
-          <h2 className="mt-1 text-[16px] font-semibold text-white">Live prices</h2>
+          <h2 className="text-[16px] font-semibold text-white">Live Prices</h2>
         </div>
         {status !== "live" && (
           <span className="mt-0.5 shrink-0 text-[10px] uppercase tracking-wider text-[#8a8a8a]">
