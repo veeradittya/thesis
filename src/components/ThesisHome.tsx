@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { Thesis, ThesisAnalysis } from "@/lib/thesis";
 import type { Quote } from "@/lib/prices";
@@ -17,16 +18,8 @@ async function runPool<T>(items: T[], worker: (t: T) => Promise<void>, concurren
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
 }
 
-const navText = {
-  fontFamily: "var(--font-inter)",
-  color: "#f6f6f6",
-  fontWeight: 400,
-  lineHeight: 1.6,
-  fontSize: "clamp(12px, calc(7.43px + 0.446vw), 16px)",
-  letterSpacing: "clamp(-0.32px, calc(-0.103px - 0.009vw), -0.24px)",
-} as const;
-
 export function ThesisHome() {
+  const router = useRouter();
   const { data: session, status } = useSession();
   const userId = session?.user?.id ?? null;
   const authed = !!userId;
@@ -36,12 +29,22 @@ export function ThesisHome() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [analyzing, setAnalyzing] = useState<Set<string>>(new Set());
   const [acctMenu, setAcctMenu] = useState(false);
+  const [booted, setBooted] = useState(false); // gates render until the first-visit redirect is decided
   const ranFor = useRef<string | null>(null); // avoid re-running the analyze loop for the same scope
 
   useEffect(() => {
     if (status === "loading") return;
     if (authed && userId) promoteGuestTheses(userId); // first authed render → carry guest theses over
     const list = loadTheses(scope);
+    // True first visit (no account, nothing saved, never finished onboarding) → the
+    // questionnaire IS the landing page. Old users reach the dashboard by logging in.
+    if (!authed && !list.length) {
+      let seen = false;
+      try { seen = localStorage.getItem("thesisv2.seen") === "1"; } catch {}
+      if (!seen) { router.replace("/onboard"); return; }
+    }
+    try { localStorage.setItem("thesisv2.seen", "1"); } catch {}
+    setBooted(true);
     setTheses(list);
 
     // live prices (one REST snapshot)
@@ -62,16 +65,20 @@ export function ThesisHome() {
     let cancelled = false;
     runPool(stale, async (t) => {
       try {
+        const prior = t.lastAnalysis
+          ? { date: t.lastAnalysis.date, verdict: t.lastAnalysis.verdict, rationale: t.lastAnalysis.rationale, beliefState: t.lastAnalysis.beliefState }
+          : undefined;
         const res = await fetch("/api/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticker: t.ticker, name: t.name, thesisText: t.thesisText, horizon: t.horizon }),
+          body: JSON.stringify({ ticker: t.ticker, name: t.name, thesisText: t.thesisText, horizon: t.horizon, prior }),
         }).then((r) => r.json());
         if (cancelled) return;
         const analysis: ThesisAnalysis = {
           date: res.date,
           verdict: res.verdict,
           rationale: res.rationale,
+          beliefState: res.beliefState ?? undefined,
           drivers: res.drivers || [],
           generatedAt: Date.now(),
           degraded: res.degraded,
@@ -106,11 +113,7 @@ export function ThesisHome() {
             className="pointer-events-auto relative flex items-center rounded-[16px]"
             style={{ width: "min(100%, 855px)", height: 55, backgroundColor: "#3a3a3a66", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
           >
-            <nav className="flex flex-1 items-center justify-start gap-4 pl-4 sm:pl-[25px]">
-              <Link href="/onboard" style={navText} className="capitalize opacity-80 transition-opacity hover:opacity-100">
-                + New thesis
-              </Link>
-            </nav>
+            <nav className="flex flex-1" />
 
             <Link
               href="/"
@@ -172,11 +175,15 @@ export function ThesisHome() {
 
       {/* ── Body ── */}
       <main className="mx-auto w-full max-w-[1100px] px-4 pb-16 pt-28">
-        {!theses.length ? (
+        {!booted ? (
+          <div className="flex min-h-[60dvh] items-center justify-center">
+            <div className="dot-loader" role="status" aria-label="Loading" />
+          </div>
+        ) : !theses.length ? (
           <div className="flex min-h-[60dvh] flex-col items-center justify-center text-center">
             <h1 className="text-[22px] font-semibold text-white">Track your first thesis</h1>
             <p className="mt-2 max-w-sm text-[13px] text-[#8a8a8a]">
-              Pick the stocks you believe in and tell us why. Each morning we check how your view is holding up against the day&apos;s news.
+              Pick the stocks you believe in and tell us why. Every morning your thesis gets a fresh verdict.
             </p>
             <Link
               href="/onboard"
@@ -195,6 +202,14 @@ export function ThesisHome() {
               {theses.map((t) => (
                 <ThesisCard key={t.id} thesis={t} quote={quotes[t.ticker]} analyzing={analyzing.has(t.id)} onRemove={remove} />
               ))}
+              {/* new-thesis creation card — stacked into the grid (replaces the old nav link) */}
+              <Link
+                href="/onboard?add=1"
+                className="fade-in flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-[20px] border border-dashed border-white/[0.12] text-[#8a8a8a] transition-colors hover:border-white/30 hover:bg-white/[0.02] hover:text-white"
+              >
+                <span className="grid h-10 w-10 place-items-center rounded-full border border-white/15 text-[22px] font-light leading-none">+</span>
+                <span className="text-[13px] font-medium">New thesis</span>
+              </Link>
             </div>
             {!authed && (
               <p className="mt-6 text-center text-[12px] text-[#666]">

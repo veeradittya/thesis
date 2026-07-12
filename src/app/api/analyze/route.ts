@@ -1,23 +1,33 @@
 import { NextResponse } from "next/server";
-import type { Verdict } from "@/lib/thesis";
-import { searchTierANews } from "@/lib/tierANews";
+import type { Verdict, BeliefState, AnalysisDriver } from "@/lib/thesis";
+import { webSearch } from "@/lib/webSearch";
+import { recentFilings } from "@/lib/edgar";
 import { searchMarkets } from "@/lib/oddpool";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // Vercel Hobby caps at 60s; the agentic loop usually finishes under (Pro allows raising this)
+export const maxDuration = 60; // Vercel Hobby cap; the tool loop usually finishes well under
 export const dynamic = "force-dynamic";
 
+// Prior belief state from the last run — the model UPDATES this instead of re-deriving.
+export interface AnalyzePrior {
+  date: string;
+  verdict: Verdict;
+  rationale: string;
+  beliefState?: BeliefState;
+}
 export interface AnalyzeInput {
   ticker: string;
   name?: string;
   thesisText?: string;
   horizon?: string | null;
+  prior?: AnalyzePrior;
 }
 export interface AnalyzeResult {
   verdict: Verdict;
-  rationale: string; // crisp plain-text prose; facts inline-hyperlinked as markdown [text](url)
-  drivers: []; // unused in the tool-research flow (facts are hyperlinked inline)
-  date: string;
+  rationale: string; // crisp plain-text prose; facts hyperlinked as markdown [text](url)
+  beliefState: BeliefState | null;
+  drivers: AnalysisDriver[]; // legacy field, kept empty (facts are hyperlinked inline)
+  date: string; // NY calendar day, stamped server-side so every client agrees
   degraded: boolean;
 }
 
@@ -26,12 +36,16 @@ function todayNY(): string {
 }
 
 const SYSTEM = [
-  "You are a disciplined equity analyst. Judge whether the investor's thesis for a stock still holds, based only on what has happened in roughly the LAST 24 HOURS.",
-  "Research it yourself. Call search_news to find the most recent, relevant developments from reputable Tier-A outlets (The Guardian, The New York Times). Search more than once, with focused queries, if that helps.",
-  "Call search_prediction_markets ONLY when a live market-implied probability would materially sharpen the verdict — otherwise don't.",
-  "Then call emit_verdict with:",
-  "- status: 'holds_up' (nothing material weighs against the thesis — the DEFAULT when the last 24h is neutral or supportive), 'weakening' (genuine new friction to a load-bearing part of the thesis), or 'at_risk' (news directly contradicts a core claim the thesis depends on).",
-  "- verdict: crisp, plain-language prose, at most ~50 words. HYPERLINK every factual claim to its source with markdown [claim text](https://article-url), using ONLY URLs returned by your searches. No ticker symbols, no cashtags, no bullet points, no headings, no hedging filler. If the last 24h brought nothing relevant, say exactly that.",
+  "You are a disciplined equity analyst re-underwriting an investor's thesis TODAY. Your job is to judge whether the thesis is still valid in light of the latest data — news, regulatory filings, market signals.",
+  "Research it yourself with the tools. Use focused queries; search more than once if needed. Check filings when fundamentals could have moved. Call search_prediction_markets ONLY when a live market-implied probability would materially sharpen the judgment.",
+  "",
+  "If a PRIOR ASSESSMENT is provided: it is your own previous work. Do NOT re-derive or restate it. Research what is NEW since its date, then update the belief state — adjust pillar statuses and confidence only where new evidence warrants, and carry forward what hasn't changed. Your verdict prose must contain ONLY new developments and what they change; if nothing material happened, say so in one short sentence.",
+  "If NO prior is provided: distill the thesis into 2-4 load-bearing pillars, research each briefly, and establish the first belief state.",
+  "",
+  "Then call emit_verdict exactly once:",
+  "- status: 'holds_up' (no pillar worse than intact/shaky-but-known — the DEFAULT), 'weakening' (a load-bearing pillar newly turned shaky), 'at_risk' (a pillar broke: evidence directly contradicts something the thesis depends on).",
+  "- verdict: crisp plain prose, at most ~50 words. HYPERLINK every factual claim to its source with markdown [claim text](https://url), using ONLY URLs returned by your tools. No ticker symbols or cashtags, no bullet points, no hedging filler, and never describe your research process — state conclusions only.",
+  "- belief_state: confidence 0-100, the pillars with statuses, and what to watch next. Keep pillar claims short and stable across days so updates are comparable.",
   "Use only facts you retrieved. Never invent a source or a URL.",
 ].join("\n");
 
@@ -39,16 +53,32 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "search_news",
-      description: "Search reputable Tier-A news (The Guardian, The New York Times) for the last ~24-48h. Pass a focused query about the company or the thesis.",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      name: "search_web",
+      description:
+        "Search the live web, restricted to Tier-A outlets (Reuters, AP, Bloomberg, WSJ, FT, Economist, CNBC, NYT, Guardian, Barron's, SEC). Use focused queries. recency='day' for the last ~24h (updates), 'week' to establish a new baseline.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          recency: { type: "string", enum: ["day", "week"] },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_recent_filings",
+      description: "The company's material SEC filings (8-K, 10-Q/K, 13D/G, S-1…) from the last two weeks, newest first, with links. Free primary source — use it when fundamentals, guidance, ownership, or deals could have moved.",
+      parameters: { type: "object", properties: {}, required: [] },
     },
   },
   {
     type: "function",
     function: {
       name: "search_prediction_markets",
-      description: "Search live prediction markets (Kalshi/Polymarket) for odds relevant to the thesis. Use only when a market-implied probability would sharpen the verdict.",
+      description: "Live prediction-market odds (Kalshi/Polymarket). Use only when a market-implied probability would sharpen the judgment.",
       parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
     },
   },
@@ -56,14 +86,33 @@ const TOOLS = [
     type: "function",
     function: {
       name: "emit_verdict",
-      description: "Deliver the final verdict.",
+      description: "Deliver today's assessment.",
       parameters: {
         type: "object",
         properties: {
           status: { type: "string", enum: ["holds_up", "weakening", "at_risk"] },
-          verdict: { type: "string", description: "crisp plain-text prose, ~50 words max, facts hyperlinked as markdown [text](url), no ticker symbols" },
+          verdict: { type: "string", description: "plain prose, <=50 words, only NEW information, facts hyperlinked as markdown [text](url)" },
+          belief_state: {
+            type: "object",
+            properties: {
+              confidence: { type: "number", description: "0-100" },
+              pillars: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    claim: { type: "string" },
+                    status: { type: "string", enum: ["intact", "shaky", "broken"] },
+                  },
+                  required: ["claim", "status"],
+                },
+              },
+              watching: { type: "array", items: { type: "string" } },
+            },
+            required: ["confidence", "pillars"],
+          },
         },
-        required: ["status", "verdict"],
+        required: ["status", "verdict", "belief_state"],
       },
     },
   },
@@ -80,7 +129,7 @@ interface ChatMsg {
   tool_call_id?: string;
 }
 
-// Keep only markdown links whose URL actually came back from a search (no fabricated sources);
+// Keep only markdown links whose URL actually came back from a tool (no fabricated sources);
 // downgrade any other [text](url) to plain "text".
 function sanitizeLinks(md: string, allow: Set<string>): string {
   const norm = (u: string) => u.split("#")[0].split("?")[0].replace(/\/$/, "");
@@ -90,16 +139,58 @@ function sanitizeLinks(md: string, allow: Set<string>): string {
   );
 }
 
-const asVerdict = (s: unknown): Verdict =>
-  s === "weakening" || s === "at_risk" ? s : "holds_up";
+const asVerdict = (s: unknown): Verdict => (s === "weakening" || s === "at_risk" ? s : "holds_up");
 
-// Pure analysis of one thesis — Opus researches Tier-A news itself via tools, then emits a
-// plain-text verdict with validated inline hyperlinks. Reused by the on-open route (and phase-2 cron).
+interface RawBelief {
+  confidence?: number;
+  pillars?: Array<{ claim?: string; status?: string }>;
+  watching?: string[];
+}
+function cleanBelief(b: RawBelief | undefined): BeliefState | null {
+  if (!b || !Array.isArray(b.pillars)) return null;
+  const pillars = b.pillars
+    .filter((p) => p?.claim)
+    .slice(0, 6)
+    .map((p) => ({
+      claim: String(p.claim).slice(0, 160),
+      status: (p.status === "shaky" || p.status === "broken" ? p.status : "intact") as "intact" | "shaky" | "broken",
+    }));
+  if (!pillars.length) return null;
+  return {
+    confidence: Math.max(0, Math.min(100, Math.round(Number(b.confidence ?? 50)))),
+    pillars,
+    watching: (Array.isArray(b.watching) ? b.watching : []).filter(Boolean).slice(0, 5).map((w) => String(w).slice(0, 120)),
+  };
+}
+
+function priorBlock(p: AnalyzePrior): string {
+  const bs = p.beliefState;
+  const pillars = bs?.pillars.map((x, i) => `  ${i + 1}. [${x.status}] ${x.claim}`).join("\n") || "  (none recorded)";
+  return [
+    `PRIOR ASSESSMENT (${p.date}) — your own previous work; update it, do not repeat it:`,
+    `Status: ${p.verdict}${bs ? ` · confidence ${bs.confidence}/100` : ""}`,
+    `Pillars:\n${pillars}`,
+    bs?.watching?.length ? `Watching: ${bs.watching.join("; ")}` : "",
+    `Previous verdict text: "${p.rationale}"`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// Pure analysis of one thesis — the model researches the live web + filings itself and updates
+// its prior belief state. Reused by the on-open route (and, phase 2, a cron worker).
 export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult> {
   const ticker = (input.ticker || "").trim().toUpperCase();
   const subject = (input.name || ticker).trim();
   const date = todayNY();
-  const degraded = (rationale: string): AnalyzeResult => ({ verdict: "holds_up", rationale, drivers: [], date, degraded: true });
+  const degraded = (rationale: string): AnalyzeResult => ({
+    verdict: input.prior?.verdict ?? "holds_up", // a failed run never flips a prior verdict
+    rationale,
+    beliefState: input.prior?.beliefState ?? null,
+    drivers: [],
+    date,
+    degraded: true,
+  });
   if (!ticker) return degraded("No ticker provided.");
 
   const base = process.env.DARTMOUTH_GATEWAY_BASE;
@@ -110,9 +201,16 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
     process.env.DARTMOUTH_MODEL || "anthropic.claude-sonnet-4-5-20250929",
   ].filter((m, i, a) => a.indexOf(m) === i);
 
-  const user = `Stock: ${subject}${input.name && input.name !== ticker ? ` (ticker ${ticker})` : ""}\nInvestor's thesis: ${
-    input.thesisText || "(none stated — assess whether the last 24h news broadly supports or undermines holding it)"
-  }\nHorizon: ${input.horizon || "unspecified"}\n\nResearch the last 24 hours and deliver the verdict.`;
+  const user = [
+    `Stock: ${subject}${input.name && input.name !== ticker ? ` (ticker ${ticker})` : ""}`,
+    `Investor's thesis: ${input.thesisText || "(none stated — judge whether the latest data broadly supports or undermines holding it)"}`,
+    `Horizon: ${input.horizon || "unspecified"}`,
+    `Today: ${date}`,
+    input.prior ? `\n${priorBlock(input.prior)}` : "",
+    input.prior ? `\nResearch what is NEW since ${input.prior.date} and update the assessment.` : "\nEstablish the assessment.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const runWithModel = async (model: string): Promise<AnalyzeResult | null> => {
     const messages: ChatMsg[] = [
@@ -121,8 +219,8 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
     ];
     const urlAllow = new Set<string>();
 
-    for (let step = 0; step < 5; step++) {
-      const forceEmit = step === 4;
+    for (let step = 0; step < 6; step++) {
+      const forceEmit = step === 5;
       let res: Response;
       try {
         res = await fetch(base + "/chat/completions", {
@@ -133,7 +231,7 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
             messages,
             tools: TOOLS,
             tool_choice: forceEmit ? { type: "function", function: { name: "emit_verdict" } } : "auto",
-            max_tokens: 1200,
+            max_tokens: 1400,
           }),
         });
       } catch (e) {
@@ -150,9 +248,17 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
       messages.push(msg);
 
       const calls = msg.tool_calls || [];
-      // Model answered in prose without emit_verdict → accept the content as the verdict.
+      // Prose without emit_verdict → accept it as the verdict, keeping the prior belief state.
       if (!calls.length) {
-        if (msg.content && msg.content.trim()) return { verdict: "holds_up", rationale: sanitizeLinks(msg.content.trim(), urlAllow), drivers: [], date, degraded: false };
+        if (msg.content?.trim())
+          return {
+            verdict: input.prior?.verdict ?? "holds_up",
+            rationale: sanitizeLinks(msg.content.trim(), urlAllow),
+            beliefState: input.prior?.beliefState ?? null,
+            drivers: [],
+            date,
+            degraded: false,
+          };
         continue;
       }
 
@@ -168,15 +274,21 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
           emitted = {
             verdict: asVerdict(args.status),
             rationale: sanitizeLinks(String(args.verdict || "").trim(), urlAllow),
+            beliefState: cleanBelief(args.belief_state as RawBelief) ?? input.prior?.beliefState ?? null,
             drivers: [],
             date,
             degraded: false,
           };
           messages.push({ role: "tool", tool_call_id: c.id, content: "ok" });
-        } else if (name === "search_news") {
-          const arts = await searchTierANews(String(args.query || subject));
-          arts.forEach((a) => urlAllow.add(a.url));
-          messages.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ results: arts }) });
+        } else if (name === "search_web") {
+          const days = args.recency === "week" ? 7 : 1;
+          const { results } = await webSearch(String(args.query || subject), days).catch(() => ({ results: [] }));
+          results.forEach((r) => urlAllow.add(r.url));
+          messages.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ results }) });
+        } else if (name === "get_recent_filings") {
+          const filings = await recentFilings(ticker).catch(() => []);
+          filings.forEach((f) => urlAllow.add(f.url));
+          messages.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ filings }) });
         } else if (name === "search_prediction_markets") {
           let markets: Array<{ question: string; yes: number | null; volume: number | null }> = [];
           try {
@@ -196,9 +308,11 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
     const out = await runWithModel(model);
     if (out) return out;
   }
-  return degraded("Couldn't complete today's research — no verdict available right now.");
+  return degraded("Today's update couldn't be completed — we'll try again next time.");
 }
 
+// POST { ticker, name?, thesisText?, horizon?, prior? } → AnalyzeResult (always HTTP 200; a
+// degraded card beats a broken dashboard). Client fans out one request per thesis, concurrency 3.
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as AnalyzeInput;
   return NextResponse.json(await analyzeThesis(body));

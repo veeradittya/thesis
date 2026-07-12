@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn, useSession } from "next-auth/react";
 import { cn } from "@/lib/utils";
 import type { Thesis, ThesisAnalysis } from "@/lib/thesis";
 import { newThesis, saveTheses, loadTheses } from "@/lib/thesisStore";
 import { ThesisCard } from "@/components/ThesisCard";
+import { exampleThesis } from "@/lib/thesisExamples";
 
 type Trader = "active" | "passive";
 type PassiveKind = "no_time" | "have_stocks" | "vest_rest";
@@ -17,7 +18,6 @@ interface Sugg {
   sector?: string;
 }
 
-const HORIZONS = ["3 months", "1 year", "3+ years"];
 const THESIS_STARTERS = [
   "Dominant market position with pricing power",
   "Secular demand outgrowing supply",
@@ -25,7 +25,6 @@ const THESIS_STARTERS = [
   "Structurally undervalued vs peers",
   "A durable AI / technology tailwind",
 ];
-const EXAMPLE = "e.g. AI datacenter demand keeps GPU orders growing faster than supply can catch up.";
 
 // ── small shared UI ───────────────────────────────────────────────────────────
 function Shell({
@@ -106,13 +105,20 @@ const ghostBtn = "inline-flex items-center justify-center rounded-full border bo
 // ── main ────────────────────────────────────────────────────────────────────
 export function Onboarding() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("trader");
-  const [trader, setTrader] = useState<Trader | null>(null);
+  // "?add=1" (the dashboard's New-thesis card) skips the questionnaire straight to picking.
+  const isAdd = useSearchParams().get("add") === "1";
+  const { data: session, status } = useSession();
+  const userId = session?.user?.id ?? null;
+  const authed = !!userId;
+  // Authed users write straight to their account store; guests build under "guest" and get
+  // promoted on sign-in (see promoteGuestTheses in ThesisHome).
+  const scope = authed ? `u.${userId}` : "guest";
+  const [step, setStep] = useState<Step>(isAdd ? "pick" : "trader");
+  const [trader, setTrader] = useState<Trader | null>(isAdd ? "active" : null);
   const [passiveKind, setPassiveKind] = useState<PassiveKind | null>(null);
   const [theses, setTheses] = useState<Thesis[]>([]); // picks become theses immediately (persisted)
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
-  const [draftHorizon, setDraftHorizon] = useState<string | null>(null);
   const [demoLoading, setDemoLoading] = useState(false);
 
   // suggestions + search (pick step)
@@ -124,18 +130,21 @@ export function Onboarding() {
   const passiveMode = passiveKind === "vest_rest";
   const picked = new Set(theses.map((t) => t.ticker));
 
-  // Resume any guest theses from a prior visit on mount, then persist on every change (the
-  // `hydrated` gate stops the initial empty state from clobbering saved picks). Survives a
-  // bail-out and lets "+ New thesis" add to an existing set; the dashboard reads the same store.
+  // Resume any saved theses for this scope once the session resolves, then persist on every
+  // change (the `hydrated` gate stops the initial empty state from clobbering saved picks).
+  // Survives a bail-out and lets "+ New thesis" add to an existing set; the dashboard reads
+  // the same store.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
-    const existing = loadTheses("guest");
+    if (status === "loading") return;
+    const existing = loadTheses(scope);
     if (existing.length) setTheses(existing);
     setHydrated(true);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, scope]);
   useEffect(() => {
-    if (hydrated) saveTheses("guest", theses);
-  }, [theses, hydrated]);
+    if (hydrated) saveTheses(scope, theses);
+  }, [theses, hydrated, scope]);
 
   // fetch personalized suggestions for the pick step
   useEffect(() => {
@@ -174,14 +183,13 @@ export function Onboarding() {
     const t = theses.find((x) => x.id === id);
     setCurrentId(id);
     setDraftText(t?.thesisText || "");
-    setDraftHorizon(t?.horizon || null);
     setStep("thesis");
   };
 
   // save the rationale onto the current thesis, then run the demo analysis
   const runDemo = async () => {
     if (!currentId) return;
-    const updated = theses.map((t) => (t.id === currentId ? { ...t, thesisText: draftText.trim(), horizon: draftHorizon } : t));
+    const updated = theses.map((t) => (t.id === currentId ? { ...t, thesisText: draftText.trim() } : t));
     setTheses(updated);
     setStep("demo");
     setDemoLoading(true);
@@ -196,6 +204,7 @@ export function Onboarding() {
         date: res.date,
         verdict: res.verdict,
         rationale: res.rationale,
+        beliefState: res.beliefState ?? undefined,
         drivers: res.drivers || [],
         generatedAt: Date.now(),
         degraded: res.degraded,
@@ -208,8 +217,9 @@ export function Onboarding() {
     }
   };
 
-  const finish = (mode: "signup" | "guest") => {
-    saveTheses("guest", theses);
+  const finish = (mode: "signup" | "done") => {
+    saveTheses(scope, theses);
+    try { localStorage.setItem("thesisv2.seen", "1"); } catch {} // dashboard stops redirecting first-timers
     if (mode === "signup") signIn("google", { callbackUrl: "/" });
     else router.push("/");
   };
@@ -221,7 +231,20 @@ export function Onboarding() {
   // ── steps ──
   if (step === "trader") {
     return (
-      <Shell step={1} total={total} eyebrow="Getting started" title="How do you invest?" subtitle="This tailors what we show you.">
+      <Shell
+        step={1}
+        total={total}
+        eyebrow="Getting started"
+        title="How do you invest?"
+        footer={
+          <p className="text-center text-[12px] text-[#666]">
+            Been here before?{" "}
+            <button onClick={() => signIn("google", { callbackUrl: "/" })} className="text-white/70 underline underline-offset-2 transition-colors hover:text-white">
+              Log in
+            </button>
+          </p>
+        }
+      >
         <div className="flex flex-col gap-3">
           <ChoiceButton
             label="Active trader"
@@ -264,17 +287,20 @@ export function Onboarding() {
       <Shell
         step={trader === "active" ? 2 : 3}
         total={total}
-        onBack={() => setStep(trader === "active" ? "trader" : "passive")}
+        onBack={() => (isAdd ? router.push("/") : setStep(trader === "active" ? "trader" : "passive"))}
         eyebrow="Build your watchlist"
         title={passiveMode ? "Pick a few funds or names to track" : "Which names are you interested in?"}
-        subtitle="Tap to add. You can add more later."
         footer={
           <div className="flex items-center justify-between">
             <span className="text-[12px] text-[#8a8a8a]">{theses.length} selected</span>
             <button
               className={primaryBtn}
               disabled={!theses.length}
-              onClick={() => (passiveMode ? setStep("funnel") : startThesis(theses[0].id))}
+              onClick={() =>
+                passiveMode
+                  ? setStep("funnel")
+                  : startThesis((theses.find((t) => !t.thesisText && !t.passive) ?? theses[0]).id)
+              }
             >
               Continue
             </button>
@@ -356,7 +382,6 @@ export function Onboarding() {
         onBack={() => setStep("pick")}
         eyebrow={current ? `${current.ticker} · ${current.name}` : "Your thesis"}
         title="Why are you interested?"
-        subtitle="A sentence is enough. We'll check it against the news each day."
         footer={
           <div className="flex items-center justify-end gap-3">
             <button className={ghostBtn} onClick={runDemo}>
@@ -388,7 +413,7 @@ export function Onboarding() {
           value={draftText}
           onChange={(e) => setDraftText(e.target.value)}
           rows={4}
-          placeholder={EXAMPLE}
+          placeholder={exampleThesis(current?.ticker, current?.name)}
           className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-[14px] leading-snug text-white placeholder:text-[#5a5a5a] outline-none transition-colors focus:border-white/25"
         />
         <div className="mt-3 flex flex-wrap gap-2">
@@ -402,23 +427,6 @@ export function Onboarding() {
             </button>
           ))}
         </div>
-        <div className="mt-5">
-          <p className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">Horizon (optional)</p>
-          <div className="mt-2 flex gap-2">
-            {HORIZONS.map((h) => (
-              <button
-                key={h}
-                onClick={() => setDraftHorizon((prev) => (prev === h ? null : h))}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-[12px] transition-colors",
-                  draftHorizon === h ? "bg-white text-black" : "bg-white/[0.06] text-[#a8a8a8] hover:text-white",
-                )}
-              >
-                {h}
-              </button>
-            ))}
-          </div>
-        </div>
       </Shell>
     );
   }
@@ -431,7 +439,7 @@ export function Onboarding() {
         onBack={() => setStep("thesis")}
         eyebrow="Your daily read"
         title="Here's how your thesis is holding up"
-        subtitle="Every morning we re-check this against the last 24 hours of news."
+        subtitle="This verdict refreshes every morning as the picture changes."
         footer={
           <div className="flex items-center justify-between gap-3">
             {withoutThesis.length > 0 ? (
@@ -459,17 +467,27 @@ export function Onboarding() {
       total={total}
       onBack={() => setStep(passiveMode ? "pick" : "demo")}
       eyebrow="You're set"
-      title="Save your theses"
-      subtitle="Sign in to keep them and get a fresh read every morning. Import a portfolio, or add more anytime."
+      title={authed ? "All set" : "Save your theses"}
+      subtitle={
+        authed
+          ? "Saved to your account. A fresh verdict arrives every morning."
+          : "Sign in to keep them and get a fresh read every morning. Import a portfolio, or add more anytime."
+      }
       footer={
-        <div className="flex flex-col gap-2.5">
-          <button className={primaryBtn} onClick={() => finish("signup")}>
-            Sign in with Google &amp; finish
+        authed ? (
+          <button className={primaryBtn} onClick={() => finish("done")}>
+            Go to dashboard →
           </button>
-          <button className="text-[13px] text-[#8a8a8a] transition-colors hover:text-white" onClick={() => finish("guest")}>
-            Continue as guest →
-          </button>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-2.5">
+            <button className={primaryBtn} onClick={() => finish("signup")}>
+              Sign in with Google &amp; finish
+            </button>
+            <button className="text-[13px] text-[#8a8a8a] transition-colors hover:text-white" onClick={() => finish("done")}>
+              Continue as guest →
+            </button>
+          </div>
+        )
       }
     >
       <div className="rounded-2xl border border-white/[0.08] bg-[#0e0e0e] p-5">

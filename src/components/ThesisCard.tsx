@@ -97,7 +97,7 @@ export function ThesisCard({
           analyzing ? (
             <div className="flex items-center gap-2.5">
               <span className="dot-loader" role="status" aria-label="Analyzing" />
-              <span className="text-[12px] text-[#8a8a8a]">Reading today&apos;s news…</span>
+              <span className="text-[12px] text-[#8a8a8a]">Updating…</span>
             </div>
           ) : (
             <span className="text-[12px] text-[#666]">Not analyzed yet</span>

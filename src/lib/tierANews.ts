@@ -13,10 +13,10 @@ export interface TierAResult {
 const strip = (s?: string) => (s || "").replace(/<[^>]+>/g, "").trim();
 const dayStr = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().slice(0, 10);
 
-async function guardian(query: string, key: string): Promise<TierAResult[]> {
+async function guardian(query: string, key: string, days = 2): Promise<TierAResult[]> {
   const url = `https://content.guardianapis.com/search?q=${encodeURIComponent(
     query,
-  )}&order-by=newest&from-date=${dayStr(2 * 864e5)}&show-fields=trailText&page-size=6&api-key=${key}`;
+  )}&order-by=newest&from-date=${dayStr(days * 864e5)}&show-fields=trailText&page-size=6&api-key=${key}`;
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) return [];
   const j = (await r.json()) as { response?: { results?: Array<{ webTitle?: string; webUrl?: string; webPublicationDate?: string; fields?: { trailText?: string } }> } };
@@ -29,10 +29,10 @@ async function guardian(query: string, key: string): Promise<TierAResult[]> {
   }));
 }
 
-async function nyt(query: string, key: string): Promise<TierAResult[]> {
+async function nyt(query: string, key: string, days = 2): Promise<TierAResult[]> {
   const url = `https://api.nytimes.com/svc/search/v2/articlesearch.json?q=${encodeURIComponent(
     query,
-  )}&sort=newest&begin_date=${dayStr(2 * 864e5).replace(/-/g, "")}&api-key=${key}`;
+  )}&sort=newest&begin_date=${dayStr(days * 864e5).replace(/-/g, "")}&api-key=${key}`;
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) return [];
   const j = (await r.json()) as { response?: { docs?: Array<{ web_url?: string; abstract?: string; snippet?: string; pub_date?: string; headline?: { main?: string } }> } };
@@ -46,12 +46,12 @@ async function nyt(query: string, key: string): Promise<TierAResult[]> {
 }
 
 // Newest-first Tier-A results for a free-text query (the model chooses the query).
-export async function searchTierANews(query: string): Promise<TierAResult[]> {
+export async function searchTierANews(query: string, days = 2): Promise<TierAResult[]> {
   const gu = process.env.GUARDIAN_API_KEY;
   const ny = process.env.NYT_API_KEY;
   const [g, n] = await Promise.all([
-    gu ? guardian(query, gu).catch(() => [] as TierAResult[]) : Promise.resolve([] as TierAResult[]),
-    ny ? nyt(query, ny).catch(() => [] as TierAResult[]) : Promise.resolve([] as TierAResult[]),
+    gu ? guardian(query, gu, days).catch(() => [] as TierAResult[]) : Promise.resolve([] as TierAResult[]),
+    ny ? nyt(query, ny, days).catch(() => [] as TierAResult[]) : Promise.resolve([] as TierAResult[]),
   ]);
   return [...g, ...n]
     .filter((a) => a.headline && a.url)

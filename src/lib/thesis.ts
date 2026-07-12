@@ -11,13 +11,27 @@ export interface AnalysisDriver {
   datetime: number; // unix ms
 }
 
+// Compact belief state carried run-to-run so each day's check UPDATES prior beliefs instead of
+// re-deriving (research-verified: a small rewritten state beats stuffing prior history into
+// context, which measurably degrades revision quality).
+export interface BeliefPillar {
+  claim: string; // a load-bearing claim the thesis depends on
+  status: "intact" | "shaky" | "broken";
+}
+export interface BeliefState {
+  confidence: number; // 0-100 — how intact the thesis looks today
+  pillars: BeliefPillar[];
+  watching: string[]; // open risks / catalysts to monitor next
+}
+
 export interface ThesisAnalysis {
   date: string; // "YYYY-MM-DD" in America/New_York — the "analyzed today" key
   verdict: Verdict;
-  rationale: string;
+  rationale: string; // delta-only prose; facts hyperlinked inline (validated server-side)
+  beliefState?: BeliefState; // passed back into the next run as the prior
   drivers: AnalysisDriver[];
   generatedAt: number; // unix ms
-  degraded?: boolean; // produced without a full Opus read (gateway down / no news)
+  degraded?: boolean; // produced without a full research pass (gateway down / no data)
 }
 
 export interface Thesis {
