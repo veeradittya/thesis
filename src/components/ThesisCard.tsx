@@ -105,7 +105,13 @@ export function ThesisCard({
         ) : (
           <>
             <p className="text-[13px] leading-relaxed text-white/85">
-              <span className={cn("font-semibold", VERDICT_STYLE[a.verdict])}>{VERDICT_LABEL[a.verdict]}.</span>{" "}
+              {/* Verdict tag only when there's a thesis to hold/break; a stock tracked without one
+                  gets the assessment text only. */}
+              {thesis.thesisText?.trim() && (
+                <>
+                  <span className={cn("font-semibold", VERDICT_STYLE[a.verdict])}>{VERDICT_LABEL[a.verdict]}.</span>{" "}
+                </>
+              )}
               {renderLinked(a.rationale)}
             </p>
             {(analyzing || a.degraded) && (

@@ -203,7 +203,7 @@ export async function analyzeThesis(input: AnalyzeInput): Promise<AnalyzeResult>
 
   const user = [
     `Stock: ${subject}${input.name && input.name !== ticker ? ` (ticker ${ticker})` : ""}`,
-    `Investor's thesis: ${input.thesisText || "(none stated — judge whether the latest data broadly supports or undermines holding it)"}`,
+    `Investor's thesis: ${input.thesisText || "(none stated — the user is simply tracking this stock; make the verdict prose a plain, current status update on what is most notable today, not a thesis judgment)"}`,
     `Horizon: ${input.horizon || "unspecified"}`,
     `Today: ${date}`,
     input.prior ? `\n${priorBlock(input.prior)}` : "",

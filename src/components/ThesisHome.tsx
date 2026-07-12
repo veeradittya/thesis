@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useSession, signIn, signOut } from "next-auth/react";
+import { useSession, signIn } from "next-auth/react";
 import type { Thesis, ThesisAnalysis } from "@/lib/thesis";
 import type { Quote } from "@/lib/prices";
 import { loadTheses, removeThesis, setAnalysis, isStale, promoteGuestTheses, type Scope } from "@/lib/thesisStore";
@@ -28,7 +28,6 @@ export function ThesisHome() {
   const [theses, setTheses] = useState<Thesis[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [analyzing, setAnalyzing] = useState<Set<string>>(new Set());
-  const [acctMenu, setAcctMenu] = useState(false);
   const [booted, setBooted] = useState(false); // gates render until the first-visit redirect is decided
   const ranFor = useRef<string | null>(null); // avoid re-running the analyze loop for the same scope
 
@@ -124,42 +123,9 @@ export function ThesisHome() {
             </Link>
 
             <div className="flex flex-1 items-center justify-end gap-4 pr-4 sm:pr-[25px]">
-              {session?.user ? (
-                <div className="relative">
-                  <button
-                    onClick={() => setAcctMenu((v) => !v)}
-                    title={session.user.email ?? session.user.name ?? "Account"}
-                    className="grid h-10 w-10 place-items-center overflow-hidden rounded-full bg-white/10 text-[13px] font-medium text-white ring-1 ring-white/15 transition-colors hover:ring-white/40"
-                  >
-                    {session.user.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={session.user.image} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                    ) : (
-                      (session.user.name ?? session.user.email ?? "U").slice(0, 1).toUpperCase()
-                    )}
-                  </button>
-                  {acctMenu && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setAcctMenu(false)} />
-                      <div className="absolute right-0 top-[46px] z-50 w-56 overflow-hidden rounded-[14px] border border-white/10 bg-[#141414]/95 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur">
-                        <div className="border-b border-white/[0.06] px-4 py-3">
-                          <p className="truncate text-[12.5px] font-medium text-white">{session.user.name ?? "Signed in"}</p>
-                          {session.user.email && <p className="truncate text-[11px] text-[#8a8a8a]">{session.user.email}</p>}
-                        </div>
-                        <button
-                          onClick={() => {
-                            setAcctMenu(false);
-                            signOut();
-                          }}
-                          className="block w-full px-4 py-2.5 text-left text-[12.5px] text-white/85 transition-colors hover:bg-white/[0.06] hover:text-white"
-                        >
-                          Sign out
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ) : (
+              {/* Signed in → a clean bar with just the THESIS wordmark (no profile photo). Guests
+                  still get a Log in pill. */}
+              {!session?.user && (
                 <button
                   onClick={() => signIn("google")}
                   className="inline-flex items-center justify-center whitespace-nowrap rounded-[42px] bg-black text-white transition-colors hover:bg-white hover:text-black"

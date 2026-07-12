@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Thesis, ThesisAnalysis } from "@/lib/thesis";
 import { newThesis, saveTheses, loadTheses } from "@/lib/thesisStore";
 import { ThesisCard } from "@/components/ThesisCard";
-import { exampleThesis } from "@/lib/thesisExamples";
+import { exampleTheses } from "@/lib/thesisExamples";
 
 type Trader = "active" | "passive";
 type PassiveKind = "no_time" | "have_stocks" | "vest_rest";
@@ -18,15 +18,67 @@ interface Sugg {
   sector?: string;
 }
 
-const THESIS_STARTERS = [
-  "Dominant market position with pricing power",
-  "Secular demand outgrowing supply",
-  "Best-in-class management executing well",
-  "Structurally undervalued vs peers",
-  "A durable AI / technology tailwind",
-];
-
 // ── small shared UI ───────────────────────────────────────────────────────────
+
+// Cycles a list of phrases as a typewriter (type → hold → delete → next → loop). Restarts when
+// the phrase set changes (e.g. the user switches which stock they're writing about).
+function useTypewriter(phrases: string[]): string {
+  const [text, setText] = useState("");
+  const key = phrases.join("|");
+  useEffect(() => {
+    if (!phrases.length) {
+      setText("");
+      return;
+    }
+    let i = 0,
+      ch = 0,
+      deleting = false,
+      cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      if (cancelled) return;
+      const full = phrases[i % phrases.length];
+      if (!deleting) {
+        ch++;
+        setText(full.slice(0, ch));
+        if (ch >= full.length) {
+          deleting = true;
+          timer = setTimeout(tick, 2000); // hold the finished phrase
+        } else timer = setTimeout(tick, 42);
+      } else {
+        ch--;
+        setText(full.slice(0, ch));
+        if (ch <= 0) {
+          deleting = false;
+          i++;
+          timer = setTimeout(tick, 400); // brief pause before the next phrase
+        } else timer = setTimeout(tick, 20);
+      }
+    };
+    timer = setTimeout(tick, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return text;
+}
+
+// Thesis textarea with a typewriter placeholder cycling asset-specific examples. Isolated so the
+// ~40ms placeholder updates don't re-render the whole step; the animation only shows while empty.
+function ThesisInput({ value, onChange, examples }: { value: string; onChange: (v: string) => void; examples: string[] }) {
+  const typed = useTypewriter(examples);
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={4}
+      placeholder={value ? "" : typed + "▌"}
+      className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-[14px] leading-snug text-white placeholder:text-[#5a5a5a] outline-none transition-colors focus:border-white/25"
+    />
+  );
+}
 function Shell({
   step,
   total,
@@ -409,24 +461,7 @@ export function Onboarding() {
             ))}
           </div>
         )}
-        <textarea
-          value={draftText}
-          onChange={(e) => setDraftText(e.target.value)}
-          rows={4}
-          placeholder={exampleThesis(current?.ticker, current?.name)}
-          className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-[14px] leading-snug text-white placeholder:text-[#5a5a5a] outline-none transition-colors focus:border-white/25"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          {THESIS_STARTERS.map((s) => (
-            <button
-              key={s}
-              onClick={() => setDraftText((prev) => (prev.trim() ? prev : s))}
-              className="rounded-full border border-white/[0.1] px-3 py-1.5 text-[11.5px] text-[#a8a8a8] transition-colors hover:border-white/25 hover:text-white"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        <ThesisInput value={draftText} onChange={setDraftText} examples={exampleTheses(current?.ticker, current?.name)} />
       </Shell>
     );
   }
@@ -437,9 +472,7 @@ export function Onboarding() {
         step={trader === "active" ? 4 : 5}
         total={total}
         onBack={() => setStep("thesis")}
-        eyebrow="Your daily read"
         title="Here's how your thesis is holding up"
-        subtitle="This verdict refreshes every morning as the picture changes."
         footer={
           <div className="flex items-center justify-between gap-3">
             {withoutThesis.length > 0 ? (
