@@ -21,7 +21,11 @@ import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { EventDetailCard, type EventStub } from "@/components/EventDetailCard";
 import { SearchCard, type SearchMode } from "@/components/SearchCard";
 import { SignalSearchCard } from "@/components/SignalSearchCard";
-import { emptyLedger, type ParsedPortfolio } from "@/lib/parsePortfolio";
+import { demoPortfolio, type ParsedPortfolio } from "@/lib/parsePortfolio";
+
+// Bump when the default seed changes so stale localStorage ledgers don't override the new demo.
+const GUEST_LEDGER_KEY = "thesis.guest.ledger.v2";
+const acctLedgerKey = (scope: string) => `thesis.${scope}.ledger.v2`;
 import type { NewsItem } from "@/lib/guardian";
 import type { MarketLite } from "@/lib/oddpool";
 
@@ -339,39 +343,30 @@ export function MonacoHome() {
   useEffect(() => {
     if (status === "loading") return; // wait for the session to resolve before choosing a source
     let cancelled = false;
-    const seedPanAgora = async (): Promise<ParsedPortfolio | null> => {
-      try {
-        const res = await fetch("/panagora.xlsx");
-        if (!res.ok) return null;
-        const ab = await res.arrayBuffer();
-        const { parsePortfolioBuffer } = await import("@/lib/parsePortfolio");
-        return parsePortfolioBuffer(ab, "PanAgora_Top10_13F_Q1_2026.xlsx");
-      } catch { return null; }
-    };
     const loadGuestLedger = (): ParsedPortfolio | null => {
       try {
-        const g = JSON.parse(localStorage.getItem("thesis.guest.ledger") || "null");
+        const g = JSON.parse(localStorage.getItem(GUEST_LEDGER_KEY) || "null");
         return g && Array.isArray(g.holdings) ? (g as ParsedPortfolio) : null;
       } catch { return null; }
     };
     (async () => {
       if (authed && scope) {
         try {
-          const saved = localStorage.getItem(`thesis.${scope}.ledger`);
+          const saved = localStorage.getItem(acctLedgerKey(scope));
           if (saved) {
             const p = JSON.parse(saved);
             if (!cancelled && p && Array.isArray(p.holdings)) { setLedger(p); setLedgerScope(scope); return; }
           }
         } catch {}
-        // First sign-in → promote a guest-built portfolio if present, else seed PanAgora (named after
-        // the user). Edits now persist to this account; clear the guest bucket so it can't leak.
+        // First sign-in → promote a guest-built portfolio if present, else seed the retail demo
+        // (named after the user). Edits now persist to this account; clear the guest bucket so it can't leak.
         const promoted = loadGuestLedger();
-        const seed = promoted ?? (await seedPanAgora()) ?? emptyLedger();
+        const seed = promoted ?? demoPortfolio();
         if (!cancelled) { setLedger(promoted ? seed : firstName ? { ...seed, portfolioName: firstName } : seed); setLedgerScope(scope); }
-        try { localStorage.removeItem("thesis.guest.ledger"); } catch {}
+        try { localStorage.removeItem(GUEST_LEDGER_KEY); } catch {}
       } else {
-        // Guest → restore a locally-edited portfolio, else seed the PanAgora demo (both editable).
-        const seed = loadGuestLedger() ?? (await seedPanAgora());
+        // Guest → restore a locally-edited portfolio, else seed the retail demo (both editable).
+        const seed = loadGuestLedger() ?? demoPortfolio();
         if (!cancelled && seed) { setLedger(seed); setLedgerScope("guest"); }
       }
     })();
@@ -383,10 +378,10 @@ export function MonacoHome() {
   useEffect(() => {
     if (!ledger) return;
     if (authed && scope && ledgerScope === scope) {
-      try { localStorage.setItem(`thesis.${scope}.ledger`, JSON.stringify(ledger)); } catch {}
+      try { localStorage.setItem(acctLedgerKey(scope), JSON.stringify(ledger)); } catch {}
     } else if (!authed && ledgerScope === "guest") {
       // Guest edits persist browser-locally (ephemeral; promoted to the account on sign-in).
-      try { localStorage.setItem("thesis.guest.ledger", JSON.stringify(ledger)); } catch {}
+      try { localStorage.setItem(GUEST_LEDGER_KEY, JSON.stringify(ledger)); } catch {}
     }
   }, [ledger, authed, scope, ledgerScope]);
 

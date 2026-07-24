@@ -42,41 +42,55 @@ async function query(sql: string, args: Arg[] = []): Promise<Record<string, stri
 
 export interface MonitorResult {
   ticker: string;
+  name: string;
   verdict: string; // holds_up | weakening | at_risk | watch
-  confidence: number | null;
-  rationale: string; // prose with inline [text](url) source links
+  risk: number | null; // 0..100, higher = more risk
+  rationale: string; // plain-language "what happened / how it affects you", may carry [text](url) links
   signals: string; // JSON string of the concrete evidence
-  createdAt: string;
+  researchedAt: string; // when the shared per-asset research last ran
 }
 export interface MonitorPayload {
-  runId: number | null;
-  memo: string | null; // portfolio-level risk memo
-  finishedAt: string | null;
+  memo: string | null; // one-line, dated portfolio-state overview
+  updatedAt: string | null; // when this portfolio's memo was last written
   results: MonitorResult[];
 }
 
-// The latest completed run's memo + per-holding results for a user.
+// The portfolio's briefing = its per-portfolio overview memo + each holding joined against the
+// SHARED per-asset research (one row per ticker, refreshed at most once/24h and reused across every
+// portfolio that holds it). No LLM runs here — this is a pure read of pre-computed rows.
 export async function getLatestMonitor(userId: string): Promise<MonitorPayload> {
-  const runs = await query("SELECT id, summary, finished_at FROM runs WHERE user_id=? ORDER BY id DESC LIMIT 1", [userId]);
-  if (!runs.length) return { runId: null, memo: null, finishedAt: null, results: [] };
-  const runId = Number(runs[0].id);
-  const rows = await query(
-    "SELECT ticker, verdict, confidence, rationale, signals, created_at FROM results WHERE run_id=? ORDER BY ticker",
-    [runId],
+  const [holdings, port] = await Promise.all([
+    query("SELECT ticker, name FROM holdings WHERE user_id=?", [userId]),
+    query("SELECT memo, updated_at FROM portfolios WHERE user_id=?", [userId]),
+  ]);
+  const memo = port.length ? port[0].memo : null;
+  const updatedAt = port.length ? port[0].updated_at : null;
+  if (!holdings.length) return { memo, updatedAt, results: [] };
+
+  const tickers = holdings.map((h) => (h.ticker || "").toUpperCase()).filter(Boolean);
+  const placeholders = tickers.map(() => "?").join(",");
+  const assetRows = await query(
+    `SELECT ticker, verdict, risk, rationale, signals, researched_at FROM assets WHERE ticker IN (${placeholders})`,
+    tickers,
   );
-  return {
-    runId,
-    memo: runs[0].summary,
-    finishedAt: runs[0].finished_at,
-    results: rows.map((r) => ({
-      ticker: r.ticker || "",
-      verdict: r.verdict || "watch",
-      confidence: r.confidence != null ? Number(r.confidence) : null,
-      rationale: r.rationale || "",
-      signals: r.signals || "{}",
-      createdAt: r.created_at || "",
-    })),
-  };
+  const byTicker = new Map(assetRows.map((r) => [(r.ticker || "").toUpperCase(), r]));
+
+  const results: MonitorResult[] = holdings.map((h) => {
+    const t = (h.ticker || "").toUpperCase();
+    const a = byTicker.get(t);
+    return {
+      ticker: t,
+      name: h.name || t,
+      verdict: a?.verdict || "watch",
+      risk: a?.risk != null ? Number(a.risk) : null,
+      rationale: a?.rationale || "",
+      signals: a?.signals || "{}",
+      researchedAt: a?.researched_at || "",
+    };
+  });
+  // Riskiest first; unresearched (null risk) sink to the bottom.
+  results.sort((a, b) => (b.risk ?? -1) - (a.risk ?? -1));
+  return { memo, updatedAt, results };
 }
 
 // Replace a user's holdings (portfolio + theses) — the source the scheduled agent reads each pass.
