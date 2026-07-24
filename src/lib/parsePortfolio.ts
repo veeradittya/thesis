@@ -11,6 +11,7 @@ export interface ParsedHolding {
   value: number | null;
   weight: number | null; // 0..1
   gain: number | null;
+  thesis?: string; // optional reason-for-holding; powers the Thesis Monitor card (may be blank)
 }
 
 export interface ParsedPortfolio {
@@ -207,8 +208,15 @@ export function emptyLedger(name = "My Portfolio"): ParsedPortfolio {
 }
 
 // Build a normalized holding from manual editor fields (blank/invalid numbers → null).
-export function makeHolding(ticker: string, name: string, shares?: number | null, price?: number | null): ParsedHolding {
+export function makeHolding(
+  ticker: string,
+  name: string,
+  shares?: number | null,
+  price?: number | null,
+  thesis?: string | null,
+): ParsedHolding {
   const t = ticker.trim().toUpperCase();
+  const th = (thesis || "").trim();
   return {
     ticker: t,
     name: name.trim() || t,
@@ -217,5 +225,6 @@ export function makeHolding(ticker: string, name: string, shares?: number | null
     value: null,
     weight: null,
     gain: null,
+    thesis: th || undefined,
   };
 }

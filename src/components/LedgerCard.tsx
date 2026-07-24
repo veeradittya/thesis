@@ -30,7 +30,7 @@ function monogram(s: string): string {
 }
 
 // Draft rows keep raw input strings so partial numbers ("12.") type cleanly.
-interface DraftRow { ticker: string; name: string; shares: string; price: string }
+interface DraftRow { ticker: string; name: string; shares: string; price: string; thesis: string }
 const numOrNull = (s: string): number | null => {
   const t = s.replace(/[,$\s]/g, "");
   if (!t) return null;
@@ -42,11 +42,12 @@ const toDraft = (h: ParsedHolding): DraftRow => ({
   name: h.name === h.ticker ? "" : h.name,
   shares: h.shares != null ? String(h.shares) : "",
   price: h.price != null ? String(h.price) : "",
+  thesis: h.thesis || "",
 });
 function rebuild(base: ParsedPortfolio, rows: DraftRow[]): ParsedPortfolio {
   const holdings = rows
     .filter((r) => r.ticker.trim() || r.name.trim())
-    .map((r) => makeHolding(r.ticker, r.name, numOrNull(r.shares), numOrNull(r.price)));
+    .map((r) => makeHolding(r.ticker, r.name, numOrNull(r.shares), numOrNull(r.price), r.thesis));
   const { totalValue } = normalizeLedger(holdings);
   return { ...base, holdings, totalValue, rowCount: holdings.length };
 }
@@ -86,7 +87,7 @@ export function LedgerCard({
   };
   const commit = (nextRows: DraftRow[], name = nameDraft) => onChange?.({ ...rebuild(data, nextRows), portfolioName: name.trim() || "My Portfolio" });
   const setRow = (i: number, patch: Partial<DraftRow>) => setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const addRow = () => setRows((prev) => [...prev, { ticker: "", name: "", shares: "", price: "" }]);
+  const addRow = () => setRows((prev) => [...prev, { ticker: "", name: "", shares: "", price: "", thesis: "" }]);
   const removeRow = (i: number) => { const next = rows.filter((_, j) => j !== i); setRows(next); commit(next); };
   const noop = (e: React.PointerEvent) => e.stopPropagation(); // keep header controls from starting a drag
 
@@ -203,6 +204,16 @@ export function LedgerCard({
                   />
                   <span className="w-[21px] shrink-0" aria-hidden />
                 </div>
+                {/* line 3 — optional thesis / reason-for-holding (drives the Thesis Monitor) */}
+                <textarea
+                  value={r.thesis}
+                  onPointerDown={noop}
+                  onChange={(e) => setRow(i, { thesis: e.target.value })}
+                  onBlur={() => commit(rows)}
+                  rows={2}
+                  placeholder="Why you hold it (optional) — tracked by the Thesis Monitor"
+                  className="no-scrollbar mt-1.5 w-full resize-none rounded-md bg-white/[0.04] px-2 py-1.5 text-[11.5px] leading-snug text-white/85 outline-none ring-1 ring-white/10 placeholder:text-[#5a5a5a] focus:ring-white/25"
+                />
               </div>
             ))}
             <button onClick={addRow} className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/15 py-2 text-[12px] text-[#9a9a9a] transition-colors hover:border-white/30 hover:text-white">

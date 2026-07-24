@@ -51,46 +51,40 @@ export function LivePricesCard({
       for (const [sym, row] of Object.entries(prev)) if (active.has(sym)) next[sym] = row;
       return next;
     });
-    const es = new EventSource(`/api/prices?symbols=${encodeURIComponent(symbols)}`);
-
-    es.addEventListener("snapshot", (e) => {
+    // REST snapshot polling (Vercel-safe) — replaces the Finnhub WebSocket→SSE relay. Each poll
+    // diffs against the last price to keep the up/down tick flash; the flash-fade effect clears it.
+    let cancelled = false;
+    const poll = async () => {
       try {
-        const q = JSON.parse((e as MessageEvent).data) as Record<string, { price: number | null; prevClose: number | null; change: number | null; percent: number | null }>;
+        const r = await fetch(`/api/quote?symbols=${encodeURIComponent(symbols)}`);
+        const j = await r.json();
+        const q = (j.quotes || {}) as Record<string, { price: number | null; prevClose: number | null; change: number | null; percent: number | null }>;
+        if (cancelled) return;
+        const now = Date.now();
         setRows((prev) => {
           const next = { ...prev };
           for (const [sym, v] of Object.entries(q)) {
-            next[sym] = { ...next[sym], price: v.price, prevClose: v.prevClose, change: v.change, percent: v.percent, flashDir: next[sym]?.flashDir ?? null, flashTs: next[sym]?.flashTs ?? 0 };
+            const old = prev[sym];
+            const prevPrice = old?.price ?? null;
+            let dir: "up" | "down" | null = old?.flashDir ?? null;
+            let flashTs = old?.flashTs ?? 0;
+            if (prevPrice != null && v.price != null && v.price !== prevPrice) {
+              dir = v.price > prevPrice ? "up" : "down";
+              flashTs = now;
+            }
+            next[sym] = { price: v.price, prevClose: v.prevClose, change: v.change, percent: v.percent, flashDir: dir, flashTs };
           }
           return next;
         });
         setStatus("live");
-      } catch {}
-    });
+      } catch {
+        if (!cancelled) setStatus((s) => (s === "live" ? "live" : "error"));
+      }
+    };
+    poll();
+    const id = setInterval(poll, 15000); // 15s snapshot cadence
 
-    es.addEventListener("trade", (e) => {
-      try {
-        const payload = JSON.parse((e as MessageEvent).data) as Record<string, { p: number; t: number }>;
-        const now = Date.now();
-        setRows((prev) => {
-          const next = { ...prev };
-          for (const [sym, t] of Object.entries(payload)) {
-            const old = prev[sym];
-            const prevPrice = old?.price ?? null;
-            const dir = prevPrice == null ? old?.flashDir ?? null : t.p > prevPrice ? "up" : t.p < prevPrice ? "down" : old?.flashDir ?? null;
-            const pc = old?.prevClose ?? null;
-            const change = pc != null ? t.p - pc : old?.change ?? null;
-            const percent = pc ? ((t.p - pc) / pc) * 100 : old?.percent ?? null;
-            next[sym] = { price: t.p, prevClose: pc, change, percent, flashDir: dir, flashTs: now };
-          }
-          return next;
-        });
-      } catch {}
-    });
-
-    es.onopen = () => setStatus("live");
-    es.onerror = () => setStatus("error"); // EventSource auto-reconnects
-
-    return () => es.close();
+    return () => { cancelled = true; clearInterval(id); };
   }, [symbols]);
 
   // Fade out tick flashes ~450ms after the last trade (only re-renders when needed).

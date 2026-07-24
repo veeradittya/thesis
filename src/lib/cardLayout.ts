@@ -26,6 +26,7 @@ export const MOBILE_BREAKPOINT = 768;
 // Placement priority (leftmost column first). `h` = preferred/basis height used for
 // balancing + scaling; `min` = never scale below this (content becomes unreadable).
 const HOME_CARDS: Array<{ key: string; h: number; min: number }> = [
+  { key: "monitor", h: 560, min: 300 },
   { key: "ledger", h: 470, min: 260 },
   { key: "markets", h: 560, min: 300 },
   { key: "macro", h: 520, min: 300 },
@@ -40,6 +41,7 @@ const HOME_CARDS: Array<{ key: string; h: number; min: number }> = [
 // Readable full-width heights for the mobile stack (charts/lists uncramped at ~350px wide).
 export const MOBILE_CARD_HEIGHTS: Record<string, number> = {
   ledger: 470,
+  monitor: 560,
   markets: 540,
   macro: 520,
   search: 540,

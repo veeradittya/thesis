@@ -5,6 +5,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { computeHomeLayout, MOBILE_BREAKPOINT, MOBILE_CARD_HEIGHTS } from "@/lib/cardLayout";
 import { StaticLayoutContext } from "@/components/ui/useMovableCard";
 import { LedgerCard } from "@/components/LedgerCard";
+import { ThesisMonitorCard } from "@/components/ThesisMonitorCard";
 import { PortfolioMarketsCard } from "@/components/PortfolioMarketsCard";
 import { MarketDetailCard, type OpenMarket } from "@/components/MarketDetailCard";
 import { WhaleCard } from "@/components/WhaleCard";
@@ -123,6 +124,8 @@ export function MonacoHome() {
   const authed = !!userId; // authenticated client → editable, per-account, persisted ledger
   const scope = authed ? `u.${userId}` : null; // localStorage namespace for this account
   const firstName = (session?.user?.name || "").trim().split(/\s+/)[0] || null; // names the seeded ledger for a signed-in user
+  // Shared scope tying the ledger, the scheduled agent, and the Daily Briefing together (demo = one portfolio).
+  const MONITOR_USER = "pilot";
 
   // Ephemeral "coming soon" pill for not-yet-built nav items.
   const [toast, setToast] = useState<string | null>(null);
@@ -326,11 +329,12 @@ export function MonacoHome() {
     },
   ];
 
-  // Ledger source, auth-gated:
-  //  • guest → seed the read-only PanAgora demo (ephemeral, never persisted to an account)
-  //  • authenticated → restore this account's cached ledger, else start empty (they add holdings)
-  // `ledgerScope` tracks which scope the loaded ledger belongs to, so the persist effect below
-  // only writes an authed user's OWN ledger (and never before its restore completes).
+  // Ledger source:
+  //  • guest → restore a locally-edited portfolio, else seed the PanAgora demo. Guests can edit;
+  //    their ledger persists browser-locally (guest scope) and promotes to the account on sign-in.
+  //  • authenticated → restore this account's cached ledger, else promote a guest ledger / seed PanAgora.
+  // `ledgerScope` tracks which scope the loaded ledger belongs to, so the persist effect writes to
+  // the right bucket and never before the restore completes.
   const [ledgerScope, setLedgerScope] = useState<string | null>(null);
   useEffect(() => {
     if (status === "loading") return; // wait for the session to resolve before choosing a source
@@ -344,6 +348,12 @@ export function MonacoHome() {
         return parsePortfolioBuffer(ab, "PanAgora_Top10_13F_Q1_2026.xlsx");
       } catch { return null; }
     };
+    const loadGuestLedger = (): ParsedPortfolio | null => {
+      try {
+        const g = JSON.parse(localStorage.getItem("thesis.guest.ledger") || "null");
+        return g && Array.isArray(g.holdings) ? (g as ParsedPortfolio) : null;
+      } catch { return null; }
+    };
     (async () => {
       if (authed && scope) {
         try {
@@ -353,11 +363,15 @@ export function MonacoHome() {
             if (!cancelled && p && Array.isArray(p.holdings)) { setLedger(p); setLedgerScope(scope); return; }
           }
         } catch {}
-        // first sign-in → start from the PanAgora seed (editable), named after the user; edits persist per-account
-        const seed = (await seedPanAgora()) ?? emptyLedger();
-        if (!cancelled) { setLedger(firstName ? { ...seed, portfolioName: firstName } : seed); setLedgerScope(scope); }
+        // First sign-in → promote a guest-built portfolio if present, else seed PanAgora (named after
+        // the user). Edits now persist to this account; clear the guest bucket so it can't leak.
+        const promoted = loadGuestLedger();
+        const seed = promoted ?? (await seedPanAgora()) ?? emptyLedger();
+        if (!cancelled) { setLedger(promoted ? seed : firstName ? { ...seed, portfolioName: firstName } : seed); setLedgerScope(scope); }
+        try { localStorage.removeItem("thesis.guest.ledger"); } catch {}
       } else {
-        const seed = await seedPanAgora(); // guest → read-only demo, ephemeral
+        // Guest → restore a locally-edited portfolio, else seed the PanAgora demo (both editable).
+        const seed = loadGuestLedger() ?? (await seedPanAgora());
         if (!cancelled && seed) { setLedger(seed); setLedgerScope("guest"); }
       }
     })();
@@ -367,9 +381,32 @@ export function MonacoHome() {
   // Persist an authenticated user's ledger to their namespace (edits, uploads). Guarded on
   // `ledgerScope === scope` so we never save before restore, or save one account's ledger under another.
   useEffect(() => {
-    if (!authed || !scope || ledgerScope !== scope || !ledger) return;
-    try { localStorage.setItem(`thesis.${scope}.ledger`, JSON.stringify(ledger)); } catch {}
+    if (!ledger) return;
+    if (authed && scope && ledgerScope === scope) {
+      try { localStorage.setItem(`thesis.${scope}.ledger`, JSON.stringify(ledger)); } catch {}
+    } else if (!authed && ledgerScope === "guest") {
+      // Guest edits persist browser-locally (ephemeral; promoted to the account on sign-in).
+      try { localStorage.setItem("thesis.guest.ledger", JSON.stringify(ledger)); } catch {}
+    }
   }, [ledger, authed, scope, ledgerScope]);
+
+  // Link the ledger to the daily agent: mirror the current holdings (+ theses) into Turso under the
+  // scope the scheduled agent reads and the Daily Briefing renders. Debounced so live ledger edits
+  // coalesce into one write; the next agent pass then analyzes exactly what's in the ledger.
+  useEffect(() => {
+    if (!ledger || !ledgerScope) return;
+    const holdings = ledger.holdings
+      .filter((h) => h.ticker)
+      .map((h) => ({ ticker: h.ticker, name: h.name ?? null, weight: h.weight ?? null, thesis: h.thesis ?? null }));
+    const t = setTimeout(() => {
+      fetch("/api/portfolio/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: MONITOR_USER, holdings }),
+      }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [ledger, ledgerScope]);
 
   // Monaco's exact .text-nav: Inter, grey-light #f6f6f6, fluid size + tracking.
   const navText = {
@@ -523,7 +560,8 @@ export function MonacoHome() {
           // resize and canvas interactions are disabled (StaticLayoutContext).
           <StaticLayoutContext.Provider value={true}>
             <div className="flex flex-col gap-3.5 px-3.5 pb-8 pt-24">
-              <MobileSlot h={MOBILE_CARD_HEIGHTS.ledger}><LedgerCard data={ledger} editable={authed} onChange={setLedger} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.monitor}><ThesisMonitorCard user={MONITOR_USER} /></MobileSlot>
+              <MobileSlot h={MOBILE_CARD_HEIGHTS.ledger}><LedgerCard data={ledger} editable onChange={setLedger} /></MobileSlot>
 
               {/* Prediction-market trio (markets · macro · search) — each immediately followed by
                   the cards it spawns, so a spawned card opens right after its origin card. */}
@@ -579,7 +617,8 @@ export function MonacoHome() {
             style={{ width: canvasSize.w, height: canvasSize.h }}
           >
             {/* default positions/sizes come from the fill-height packer (computeHomeLayout) */}
-            <LedgerCard data={ledger} editable={authed} onChange={setLedger} x={homeL.ledger.x} y={homeL.ledger.y} width={homeL.ledger.w} height={homeL.ledger.h} />
+            <LedgerCard data={ledger} editable onChange={setLedger} x={homeL.ledger.x} y={homeL.ledger.y} width={homeL.ledger.w} height={homeL.ledger.h} />
+            <ThesisMonitorCard user={MONITOR_USER} x={homeL.monitor.x} y={homeL.monitor.y} width={homeL.monitor.w} height={homeL.monitor.h} />
             <PortfolioMarketsCard holdings={ledger.holdings} x={homeL.markets.x} y={homeL.markets.y} width={homeL.markets.w} height={homeL.markets.h} onOpenMarket={openMarket} />
             <WhaleCard x={homeL.whale.x} y={homeL.whale.y} width={homeL.whale.w} height={homeL.whale.h} />
             <OddpoolChatCard portfolio={portfolioCtx} x={homeL.chat.x} y={homeL.chat.y} width={homeL.chat.w} height={homeL.chat.h} />

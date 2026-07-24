@@ -1,7 +1,7 @@
-import { ThesisHome } from "@/components/ThesisHome";
+import { MonacoHome } from "@/components/MonacoHome";
 
-// Daily AI thesis-health tracker (replaces the prediction-market card dashboard, which
-// lives on in git under src/components/MonacoHome.tsx).
+// The movable-card portfolio dashboard. The post-fork daily thesis-tracker is now folded in as
+// the "Thesis Monitor" card (src/components/ThesisMonitorCard.tsx) tied to the portfolio ledger.
 export default function Home() {
-  return <ThesisHome />;
+  return <MonacoHome />;
 }
